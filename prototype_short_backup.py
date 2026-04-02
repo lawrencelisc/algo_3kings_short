@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('AlgoTrade_Short_V6.0')
 
 # ⚠️ 請確保 API 金鑰正確
-API_KEY = "xd8NcfedvibG9tP4iD"
-API_SECRET = "ZzGICmYtkDHyTWgT1UiGpiesjz9b26Mactbw"
+API_KEY = ""
+API_SECRET = ""
 
 exchange = ccxt.bybit({
     'apiKey': API_KEY,
