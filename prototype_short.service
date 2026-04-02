@@ -6,7 +6,6 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/usr/local/app/algo_3kings_short
-EnvironmentFile=/usr/local/app/algo_3kings_short/.env
 ExecStart=/usr/local/app/algo_3kings_short/venv/bin/python3.12 prototype_short.py
 StandardOutput=journal
 StandardError=journal
