@@ -55,7 +55,7 @@ CSV_COLUMNS = ['timestamp', 'symbol', 'action', 'price', 'amount', 'trade_value'
 # 1. 核心輔助模組
 # ==========================================
 def log_to_csv(data_dict):
-    row = {col: '' for col in CSV_COLUMNS};
+    row = {col: '' for col in CSV_COLUMNS}
     row.update(data_dict)
     row['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     pd.DataFrame([row], columns=CSV_COLUMNS).to_csv(LOG_FILE, mode='a', index=False,
@@ -70,9 +70,12 @@ def get_live_usdt_balance():
 
 
 def cancel_all_v5(symbol):
+    """撤銷所有未完成訂單，包含專屬 TP/SL 鬼單"""
     try:
         exchange.cancel_all_orders(symbol, params={'orderFilter': 'Order'})
         exchange.cancel_all_orders(symbol, params={'orderFilter': 'StopOrder'})
+        # 🔫 擊殺鬼單專用：特別針對 Bybit 的 tpslOrder
+        exchange.cancel_all_orders(symbol, params={'orderFilter': 'tpslOrder'})
     except:
         pass
 
@@ -91,7 +94,6 @@ def get_market_metrics(symbol):
 
 
 def get_3_layer_avg_price(symbol, side='bids'):
-    # 做空進場看買盤 (Bids)，出場看賣盤 (Asks)
     try:
         ob = exchange.fetch_order_book(symbol, limit=5)
         levels = ob[side][:3]
@@ -101,7 +103,7 @@ def get_3_layer_avg_price(symbol, side='bids'):
 
 
 # ==========================================
-# 2. 導航與海選 (Short Side 邏輯翻轉 - Target Price 版)
+# 2. 導航與海選 (Short)
 # ==========================================
 def get_btc_regime():
     try:
@@ -111,27 +113,22 @@ def get_btc_regime():
         sma20 = df['c'].rolling(20).mean().iloc[-1]
         sma50 = df['c'].rolling(50).mean().iloc[-1]
 
-        # 🚀 核心門檻
         target_short = sma20 * (1 - 0.0025)
-        deviation = (curr_p - sma20) / sma20
 
-        # 📊 條件檢查
-        cond_price = curr_p < target_short  # 價格是否夠低
-        cond_trend = sma20 < sma50  # 趨勢是否轉空
+        cond_price = curr_p < target_short
+        cond_trend = sma20 < sma50
 
-        # 轉化為圖標
         tick_p = "✅" if cond_price else "❌"
         tick_t = "✅" if cond_trend else "❌"
 
-        # 🚦 燈號邏輯
+        # 🚦 統一燈號邏輯：綠燈 = 准許行動，紅燈 = 禁止行動
         if cond_price and cond_trend:
-            status, signal = "🔴 紅燈 (空頭全軍出擊)", -1
+            status, signal = "🟢 綠燈 (空頭全軍出擊)", 1
         elif cond_price or cond_trend:
             status, signal = "🟡 黃燈 (條件未齊 - 觀望)", 0
         else:
-            status, signal = "🟢 綠燈 (多頭強勢 - 撤退)", 1
+            status, signal = "🔴 紅燈 (多頭強勢 - 撤退)", -1
 
-        # 🚀 終極視覺化 Presentation
         print("-" * 60)
         print(f"📊 BTC 實時戰報 | 現價: {curr_p:.0f}")
         print(f"1️⃣ 價格門檻: {curr_p:.0f} < {target_short:.0f} {tick_p}")
@@ -146,14 +143,12 @@ def get_btc_regime():
 
 
 def scouting_weak_coins(n=5):
-    """【海選】在大幣池中找跌勢最猛、表現最弱的標的"""
     try:
         tickers = exchange.fetch_tickers()
         data = [{'symbol': s, 'volume': t['quoteVolume'], 'change': t['percentage']}
                 for s, t in tickers.items() if
                 s.endswith(':USDT') and s not in BLACKLIST and t['percentage'] is not None]
         df = pd.DataFrame(data)
-        # 先選前 20 大成交量，再選漲幅最小 (即跌幅最大) 的 n 隻
         return df.sort_values('volume', ascending=False).head(20).sort_values('change', ascending=True).head(n)[
             'symbol'].tolist()
     except:
@@ -169,10 +164,10 @@ def apply_lee_ready_short_logic(symbol):
         df['dir'] = np.where(df['price'] > midpoint, 1, np.where(df['price'] < midpoint, -1, 0))
         df['tick'] = df['price'].diff().apply(np.sign).replace(0, np.nan).ffill().fillna(0)
         df['final'] = np.where(df['dir'] != 0, df['dir'], df['tick'])
-        # 金額加權流向
+
         df['weighted_flow'] = df['final'] * df['amount'] * df['price']
         net_flow = df['weighted_flow'].sum()
-        # 做空訊號：淨流量為顯著負數
+
         is_weak = net_flow < -(df['weighted_flow'].std() * NET_FLOW_SIGMA)
         return net_flow, df['price'].iloc[-1], is_weak
     except:
@@ -180,7 +175,7 @@ def apply_lee_ready_short_logic(symbol):
 
 
 # ==========================================
-# 3. 持倉管理 (修正 2, 3：空單版)
+# 3. 持倉管理 (Short)
 # ==========================================
 def manage_short_positions():
     try:
@@ -191,24 +186,23 @@ def manage_short_positions():
         for s in list(positions.keys()):
             if s not in live_symbols:
                 print(f"🧹 清理幽靈空單倉位: {s}")
+                # 🔫 擊殺鬼單：不但要刪除本地記憶，仲要通知交易所撤單！
+                cancel_all_v5(s)
                 if s in cooldown_tracker: del cooldown_tracker[s]
-                del positions[s];
+                del positions[s]
                 continue
 
         for s in list(positions.keys()):
             curr_p, pos = exchange.fetch_ticker(s)['last'], positions[s]
-            # 做空盈虧：(進場價 - 現價)
             pnl_pct = (pos['entry_price'] - curr_p) / pos['entry_price']
             sl_updated = False
 
-            # 保本位 (獲利 > 0.3%，止損壓到成本下方一點點)
             if not pos['is_breakeven'] and pnl_pct > 0.003:
                 pos['sl_price'], pos['is_breakeven'], sl_updated = pos['entry_price'] * 0.9998, True, True
 
-            # 追蹤止損 (做空版：價格越低，止損往下推)
             if pos['is_breakeven']:
                 trail_sl = curr_p + (TRAIL_ATR_MULT * pos['atr'])
-                if trail_sl < pos['sl_price']:  # 止損線往下壓才是有效追蹤
+                if trail_sl < pos['sl_price']:
                     pos['sl_price'], sl_updated = trail_sl, True
 
             if sl_updated:
@@ -229,7 +223,6 @@ def manage_short_positions():
             if exit_reason:
                 print(f"⚔️ 觸發 {exit_reason}，執行 IOC 平空單: {s}")
                 try:
-                    # 平空單要買回，看賣盤 (Asks)
                     ioc_price = get_3_layer_avg_price(s, 'asks') or curr_p
                     exchange.create_order(s, 'limit', 'buy', pos['amount'], ioc_price,
                                           {'timeInForce': 'IOC', 'reduceOnly': True})
@@ -239,6 +232,8 @@ def manage_short_positions():
                 log_to_csv({'symbol': s, 'action': 'SHORT_EXIT', 'price': curr_p, 'amount': pos['amount'],
                             'reason': exit_reason,
                             'realized_pnl': round((pos['entry_price'] - curr_p) * pos['amount'], 4)})
+
+                # 撤銷所有掛單防鬼單
                 cancel_all_v5(s)
                 if s in cooldown_tracker: del cooldown_tracker[s]
                 del positions[s]
@@ -247,10 +242,15 @@ def manage_short_positions():
 
 
 # ==========================================
-# 4. 執行入場 (三段式開空單)
+# 4. 執行入場 (Short)
 # ==========================================
 def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatile):
-    if symbol in cooldown_tracker and time.time() < cooldown_tracker[symbol]: return
+    if symbol in cooldown_tracker:
+        if time.time() < cooldown_tracker[symbol]:
+            return
+        else:
+            del cooldown_tracker[symbol]
+
     if not (is_weak and is_volatile and symbol not in positions): return
 
     cancel_all_v5(symbol)
@@ -260,7 +260,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
     amount = float(exchange.amount_to_precision(symbol, trade_val / current_price))
 
     if amount < exchange.markets[symbol]['limits']['amount']['min']: return
-    # 進場開空，掛買盤 (Bids)
+
     ioc_p = get_3_layer_avg_price(symbol, 'bids') or current_price
     if amount * ioc_p < MIN_NOTIONAL: return
 
@@ -272,23 +272,21 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             logger.warning(f"⚠️ {symbol} 槓桿異常: {e}")
 
     try:
-        # 第一步：開空倉 (Sell)
+        # 第一步：開空倉
         order = exchange.create_order(symbol, 'limit', 'sell', amount, ioc_p, {'timeInForce': 'IOC', 'positionIdx': 0})
         time.sleep(1)
 
-        # 🛠️ 第二步：安全地獲取實際成交價 (修復 Bybit IOC 報錯問題)
+        # 第二步：安全獲取實際成交價
         actual_price = ioc_p
         actual_amount = 0
 
         try:
-            # 加入 params={"acknowledged": True} 嘗試解決 Bybit 警告
             order_detail = exchange.fetch_order(order['id'], symbol, params={"acknowledged": True})
             actual_price = float(order_detail.get('average') or order_detail.get('price') or ioc_p)
             actual_amount = float(order_detail.get('filled', 0))
         except Exception as e:
             logger.warning(f"⚠️ {symbol} 獲取訂單失敗，啟動備用持倉同步: {e}")
             time.sleep(0.5)
-            # 如果 API 報錯，直接去查交易所目前的真實倉位！
             live_pos = exchange.fetch_positions()
             for p in live_pos:
                 if p['symbol'] == symbol and float(p.get('contracts', 0) or p.get('size', 0)) > 0:
@@ -296,12 +294,11 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
                     actual_price = float(p.get('entryPrice') or ioc_p)
                     break
 
-        # 如果最終確認數量是 0，代表真的沒成交 (IOC 取消了)
         if actual_amount == 0:
             print(f"⏩ {symbol} IOC 未成交，撤退。")
             return
 
-        # 第三步：計算並物理設置止盈止損 (空單版)
+        # 第三步：設置止盈止損
         tp_p = float(exchange.price_to_precision(symbol, actual_price - (TP_ATR_MULT * atr)))
         sl_p = float(exchange.price_to_precision(symbol, actual_price + (SL_ATR_MULT * atr)))
 
@@ -313,7 +310,6 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
         except Exception as e:
             logger.warning(f"⚠️ {symbol} 止盈止損設置異常 (不影響本地追蹤): {e}")
 
-        # 第四步：安全寫入本地大腦
         positions[symbol] = {'amount': actual_amount, 'entry_price': actual_price, 'tp_price': tp_p, 'sl_price': sl_p,
                              'is_breakeven': False, 'atr': atr}
         cooldown_tracker[symbol] = time.time() + 3600
@@ -330,7 +326,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 
 
 # ==========================================
-# 5. 主程序 (頻率分離版)
+# 5. 主程序
 # ==========================================
 def main():
     print(f"🚀 AI 實戰 V6.0 FINAL SHORT (空軍完全體) 啟動...")
@@ -341,8 +337,8 @@ def main():
             curr_t = time.time()
             if curr_t - last_scout_time > SCOUTING_INTERVAL:
                 regime = get_btc_regime()
-                if regime == -1:  # 🔴 只有大盤空頭確認才海選
-                    print("🔴 紅燈確認：執行空單海選掃描...")
+                if regime == 1:  # 🟢 統一為綠燈 (1) 觸發行動
+                    print("🟢 綠燈確認：執行空單海選掃描...")
                     target_coins = scouting_weak_coins(5)
                     for s in target_coins:
                         try:
@@ -352,18 +348,23 @@ def main():
                         except Exception as e:
                             continue
                         time.sleep(0.5)
+                else:
+                    print(f"🚦 目前導航狀態為 {regime}，海選暫停。")
+
                 last_scout_time = curr_t
                 print(f"⏳ 空軍巡邏完畢 | 持倉: {list(positions.keys())} | 餘額: {get_live_usdt_balance():.2f}")
             time.sleep(POSITION_CHECK_INTERVAL)
+
+        # 確保 Ctrl+C 放喺前面，可以隨時手動停機
+        except KeyboardInterrupt:
+            print(f"\n👋 指揮官手動終止。餘額: {get_live_usdt_balance():.2f} USDT | 持倉: {list(positions.keys())}")
+            sys.exit(0)
+
         except Exception as e:
             if "10006" in str(e):
                 time.sleep(30)
             else:
                 time.sleep(10)
-
-        except KeyboardInterrupt:
-            print(f"\n👋 指揮官手動終止。餘額: {get_live_usdt_balance():.2f} USDT | 持倉: {list(positions.keys())}")
-            sys.exit(0)
 
 
 if __name__ == "__main__":
