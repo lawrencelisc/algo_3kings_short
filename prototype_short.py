@@ -101,7 +101,7 @@ def get_3_layer_avg_price(symbol, side='bids'):
 
 
 # ==========================================
-# 2. 導航與海選 (Short Side 邏輯翻轉)
+# 2. 導航與海選 (Short Side 邏輯翻轉 - Target Price 版)
 # ==========================================
 def get_btc_regime():
     try:
@@ -110,19 +110,38 @@ def get_btc_regime():
         curr_p = df['c'].iloc[-1]
         sma20 = df['c'].rolling(20).mean().iloc[-1]
         sma50 = df['c'].rolling(50).mean().iloc[-1]
+
+        # 🚀 核心門檻
+        target_short = sma20 * (1 - 0.0025)
         deviation = (curr_p - sma20) / sma20
 
-        # 做空信號：偏離度 < -0.25% 且 短線跌破長線
-        if deviation < -0.0025 and sma20 < sma50:
-            status, signal = "🔴 紅燈 (空頭確認)", -1
-        elif deviation > 0.0025:
-            status, signal = "🟢 綠燈", 1
+        # 📊 條件檢查
+        cond_price = curr_p < target_short  # 價格是否夠低
+        cond_trend = sma20 < sma50  # 趨勢是否轉空
+
+        # 轉化為圖標
+        tick_p = "✅" if cond_price else "❌"
+        tick_t = "✅" if cond_trend else "❌"
+
+        # 🚦 燈號邏輯
+        if cond_price and cond_trend:
+            status, signal = "🔴 紅燈 (空頭全軍出擊)", -1
+        elif cond_price or cond_trend:
+            status, signal = "🟡 黃燈 (條件未齊 - 觀望)", 0
         else:
-            status, signal = "🟡 黃燈", 0
-        print(
-            f"📊 BTC | Price: {curr_p:.0f} | Dev: {deviation:.2%} | Trend: {'DOWN' if sma20 < sma50 else 'UP'} | {status}")
+            status, signal = "🟢 綠燈 (多頭強勢 - 撤退)", 1
+
+        # 🚀 終極視覺化 Presentation
+        print("-" * 60)
+        print(f"📊 BTC 實時戰報 | 現價: {curr_p:.0f}")
+        print(f"1️⃣ 價格門檻: {curr_p:.0f} < {target_short:.0f} {tick_p}")
+        print(f"2️⃣ 趨勢確認: SMA20({sma20:.0f}) < SMA50({sma50:.0f}) {tick_t}")
+        print(f"🚦 最終決策: {status}")
+        print("-" * 60)
+
         return signal
-    except:
+    except Exception as e:
+        print(f"⚠️ 導航故障: {e}")
         return 0
 
 
