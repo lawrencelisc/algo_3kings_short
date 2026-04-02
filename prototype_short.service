@@ -1,14 +1,18 @@
 [Unit]
 Description=algo_3kings_short
+After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/usr/local/app/algo_3kings_short
-ExecStart=/usr/local/app/algo_3kings_short/venv/bin/python3.12 prototype_short.py
-StandardOutput=syslog
-Restart=always
-RestartSec=2
 User=root
+WorkingDirectory=/usr/local/app/algo_3kings_short
+EnvironmentFile=/usr/local/app/algo_3kings_short/.env
+ExecStart=/usr/local/app/algo_3kings_short/venv/bin/python3.12 prototype_short.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=algo_short
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
