@@ -1,17 +1,16 @@
 [Unit]
-Description=algo_3kings_short
+Description=algo_3kings_short - Bybit Quant Bot
 After=network.target
 
 [Service]
 Type=simple
-User=root
+Environment=SSL_CERT_FILE=/usr/local/app/algo_3kings_short/venv/lib/python3.12/site-packages/certifi/cacert.pem
+Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/usr/local/app/algo_3kings_short
-ExecStart=/usr/local/app/algo_3kings_short/venv/bin/python3.12 prototype_short.py
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=algo_short
+ExecStart=/usr/local/app/algo_3kings_short/venv/bin/python3.12 -u prototype_short.py
 Restart=always
 RestartSec=10
+User=root
 
 [Install]
 WantedBy=multi-user.target
