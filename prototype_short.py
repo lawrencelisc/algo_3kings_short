@@ -276,11 +276,30 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
         order = exchange.create_order(symbol, 'limit', 'sell', amount, ioc_p, {'timeInForce': 'IOC', 'positionIdx': 0})
         time.sleep(1)
 
-        # 第二步：獲取實際成交價
-        order_detail = exchange.fetch_order(order['id'], symbol)
-        actual_price = float(order_detail.get('average') or order_detail.get('price') or ioc_p)
-        actual_amount = float(order_detail.get('filled', 0))
-        if actual_amount == 0: return
+        # 🛠️ 第二步：安全地獲取實際成交價 (修復 Bybit IOC 報錯問題)
+        actual_price = ioc_p
+        actual_amount = 0
+
+        try:
+            # 加入 params={"acknowledged": True} 嘗試解決 Bybit 警告
+            order_detail = exchange.fetch_order(order['id'], symbol, params={"acknowledged": True})
+            actual_price = float(order_detail.get('average') or order_detail.get('price') or ioc_p)
+            actual_amount = float(order_detail.get('filled', 0))
+        except Exception as e:
+            logger.warning(f"⚠️ {symbol} 獲取訂單失敗，啟動備用持倉同步: {e}")
+            time.sleep(0.5)
+            # 如果 API 報錯，直接去查交易所目前的真實倉位！
+            live_pos = exchange.fetch_positions()
+            for p in live_pos:
+                if p['symbol'] == symbol and float(p.get('contracts', 0) or p.get('size', 0)) > 0:
+                    actual_amount = float(p.get('contracts', 0) or p.get('size', 0))
+                    actual_price = float(p.get('entryPrice') or ioc_p)
+                    break
+
+        # 如果最終確認數量是 0，代表真的沒成交 (IOC 取消了)
+        if actual_amount == 0:
+            print(f"⏩ {symbol} IOC 未成交，撤退。")
+            return
 
         # 第三步：計算並物理設置止盈止損 (空單版)
         tp_p = float(exchange.price_to_precision(symbol, actual_price - (TP_ATR_MULT * atr)))
@@ -290,20 +309,24 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             exchange.private_post_v5_position_trading_stop(
                 {'category': 'linear', 'symbol': exchange.market_id(symbol), 'stopLoss': str(sl_p),
                  'takeProfit': str(tp_p), 'tpslMode': 'Full', 'positionIdx': 0})
-        except:
-            pass
+            print(f"✅ {symbol} 止盈止損已設置 | TP: {tp_p} | SL: {sl_p}")
+        except Exception as e:
+            logger.warning(f"⚠️ {symbol} 止盈止損設置異常 (不影響本地追蹤): {e}")
 
+        # 第四步：安全寫入本地大腦
         positions[symbol] = {'amount': actual_amount, 'entry_price': actual_price, 'tp_price': tp_p, 'sl_price': sl_p,
                              'is_breakeven': False, 'atr': atr}
         cooldown_tracker[symbol] = time.time() + 3600
+
         log_to_csv({'symbol': symbol, 'action': 'SHORT_ENTRY', 'price': actual_price, 'amount': actual_amount,
                     'trade_value': round(actual_amount * actual_price, 2), 'atr': round(atr, 4),
                     'net_flow': round(net_flow, 2), 'tp_price': tp_p, 'sl_price': sl_p,
                     'actual_balance': round(actual_bal, 2), 'effective_balance': eff_bal})
-        print(f"📉 [已入貨做空] {symbol} @ {actual_price:.4f}")
+
+        print(f"📉 [已入貨做空] {symbol} @ {actual_price:.4f} | 數量: {actual_amount}")
 
     except Exception as e:
-        logger.error(f"❌ {symbol} 做空入場失敗: {e}")
+        logger.error(f"❌ {symbol} 做空核心執行失敗: {e}")
 
 
 # ==========================================
