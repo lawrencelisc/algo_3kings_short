@@ -101,6 +101,8 @@ def process_native_exit_log(symbol, pos, position_type='short'):
         'realized_pnl': real_pnl
     })
 
+    return real_pnl
+
 def get_live_usdt_balance():
     try:
         return float(exchange.fetch_balance()['USDT']['free'])
@@ -231,13 +233,31 @@ def manage_short_positions():
         live_symbols = {p['symbol']: p for p in live_positions_raw if
                         float(p.get('contracts', 0) or p.get('size', 0)) > 0}
 
+        # for s in list(positions.keys()):
+        #     if s not in live_symbols:
+        #         print(f"🧹 交易所已自動平倉 (TP/SL)，清理本地紀錄: {s}")
+        #
+        #         # 🚀 執行新版精準會計模組
+        #         process_native_exit_log(s, positions[s], position_type='short')
+        #         cancel_all_v5(s)
+        #
+        #         del positions[s]
+        #         continue
         for s in list(positions.keys()):
             if s not in live_symbols:
-                print(f"🧹 交易所已自動平倉 (TP/SL)，清理本地紀錄: {s}")
+                print(f"🧹 交易所已自動平倉，處理真實 PnL 結算單: {s}")
 
-                # 🚀 執行新版精準會計模組
-                process_native_exit_log(s, positions[s], position_type='short')
+                # 攞返賺蝕結果
+                real_pnl = process_native_exit_log(s, positions[s], position_type='short')  # long版就寫 'long'
+
                 cancel_all_v5(s)
+
+                # 🚀 新增非對稱冷卻邏輯：如果贏錢 (PnL > 0)，即刻剷走冷卻時間！
+                if real_pnl > 0:
+                    print(f"🏆 {s} 贏錢平倉！解除冷卻，允許乘勝追擊！")
+                    if s in cooldown_tracker:
+                        del cooldown_tracker[s]
+
                 del positions[s]
                 continue
 
@@ -278,11 +298,21 @@ def manage_short_positions():
                 except:
                     exchange.create_market_buy_order(s, pos['amount'], {'reduceOnly': True})
 
+                # 先計好利潤
+                ioc_pnl = round((pos['entry_price'] - curr_p) * pos['amount'], 4)
+
                 log_to_csv({'symbol': s, 'action': 'SHORT_EXIT', 'price': curr_p, 'amount': pos['amount'],
                             'reason': exit_reason,
-                            'realized_pnl': round((pos['entry_price'] - curr_p) * pos['amount'], 4)})
+                            'realized_pnl': ioc_pnl})
 
                 cancel_all_v5(s)
+
+                # 🚀 同步非對稱冷卻邏輯：如果主動平倉係贏錢，一樣解除冷卻！
+                if ioc_pnl > 0:
+                    print(f"🏆 {s} Bot 主動止盈平倉！解除冷卻，允許乘勝追擊！")
+                    if s in cooldown_tracker:
+                        del cooldown_tracker[s]
+
                 # 🚨 修復：絕對不刪除冷卻時間
                 del positions[s]
     except Exception as e:
