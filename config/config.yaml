@@ -1,0 +1,17 @@
+ACCOUNTS:
+#  Yamato:
+#    key: "fpirpvJmwub1uAzqA4"     # 艦長請確認子帳號 API 已開啟 Contract 交易
+#    secret: "9QQwKuZEg8e3YFKTYXSGj3MW9YBHlomeCrtJ"
+#    fleet: "Vanguard"
+#  Dreadnought:
+#    key: "xd8NcfedvibG9tP4iD"
+#    secret: "ZzGICmYtkDHyTWgT1UiGpiesjz9b26Mactbw"
+#    fleet: "Strike"
+  Yukikaze:
+    key: "1VjRtJ4cjuJiFk2wFs"
+    secret: "s5N38enwd75l0CxvIFLPFWWWmAbj2YxK941j"
+    fleet: "Hunter"
+
+TG_BOT:
+  TOKEN: "8730258275:AAFAispAsUEIAwy6fAHXGV_3nERRSpbOp4Q"
+  GROUP_ID: "8394621040"
