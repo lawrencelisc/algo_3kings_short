@@ -235,9 +235,21 @@ def manage_short_positions():
             if s not in live_symbols:
                 print(f"🧹 交易所已自動平倉 (TP/SL)，清理本地紀錄: {s}")
 
+                # 📝 原本的估算邏輯 (已 Comment 掉)
+                # try:
+                #     curr_p = exchange.fetch_ticker(s)['last']
+                #     pos = positions[s]
+                #     est_pnl = round((pos['entry_price'] - curr_p) * pos['amount'], 4)
+                #     log_to_csv({ ... })
+                # except Exception as e: pass
+
                 # 🚀 執行新版精準會計模組
                 process_native_exit_log(s, positions[s], position_type='short')
+
                 cancel_all_v5(s)
+                # 🚨 重要修正：保留冷卻時間，不再執行 del cooldown_tracker[s]
+                # if s in cooldown_tracker: del cooldown_tracker[s]
+
                 del positions[s]
                 continue
 
