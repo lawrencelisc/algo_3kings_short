@@ -70,21 +70,12 @@ def get_live_usdt_balance():
 
 
 def cancel_all_v5(symbol):
-    """核彈級撤單：清理所有掛單與倉位綁定的 TP/SL"""
+    """撤銷所有未完成訂單，包含專屬 TP/SL 鬼單"""
     try:
-        exchange.cancel_all_orders(symbol, params={'category': 'linear'})
-        exchange.cancel_all_orders(symbol, params={'category': 'linear', 'orderFilter': 'StopOrder'})
-        exchange.cancel_all_orders(symbol, params={'category': 'linear', 'orderFilter': 'tpslOrder'})
-    except:
-        pass
-    try:
-        exchange.private_post_v5_position_trading_stop({
-            'category': 'linear',
-            'symbol': exchange.market_id(symbol),
-            'takeProfit': "0",
-            'stopLoss': "0",
-            'positionIdx': 0
-        })
+        exchange.cancel_all_orders(symbol, params={'orderFilter': 'Order'})
+        exchange.cancel_all_orders(symbol, params={'orderFilter': 'StopOrder'})
+        # 🔫 擊殺鬼單專用：特別針對 Bybit 的 tpslOrder
+        exchange.cancel_all_orders(symbol, params={'orderFilter': 'tpslOrder'})
     except:
         pass
 
@@ -130,7 +121,7 @@ def get_btc_regime():
         tick_p = "✅" if cond_price else "❌"
         tick_t = "✅" if cond_trend else "❌"
 
-        # 🚦 統一燈號邏輯
+        # 🚦 統一燈號邏輯：綠燈 = 准許行動，紅燈 = 禁止行動
         if cond_price and cond_trend:
             status, signal = "🟢 綠燈 (空頭全軍出擊)", 1
         elif cond_price or cond_trend:
@@ -194,27 +185,10 @@ def manage_short_positions():
 
         for s in list(positions.keys()):
             if s not in live_symbols:
-                print(f"🧹 交易所已自動平倉 (TP/SL)，清理本地紀錄: {s}")
-
-                # 📝 補漏：為「交易所原生平倉」補寫 CSV 紀錄
-                try:
-                    curr_p = exchange.fetch_ticker(s)['last']
-                    pos = positions[s]
-                    # 做空 PnL 估算
-                    est_pnl = round((pos['entry_price'] - curr_p) * pos['amount'], 4)
-                    log_to_csv({
-                        'symbol': s,
-                        'action': 'NATIVE_EXIT',
-                        'price': curr_p,
-                        'amount': pos['amount'],
-                        'reason': 'Bybit Native TP/SL',
-                        'realized_pnl': est_pnl
-                    })
-                except Exception as e:
-                    pass  # 即使攞價錢失敗，都照樣繼續清理
-
+                print(f"🧹 清理幽靈空單倉位: {s}")
+                # 🔫 擊殺鬼單：不但要刪除本地記憶，仲要通知交易所撤單！
                 cancel_all_v5(s)
-                # 🚨 修復：絕對不刪除冷卻時間，必須硬性坐滿 1 小時！
+                if s in cooldown_tracker: del cooldown_tracker[s]
                 del positions[s]
                 continue
 
@@ -259,8 +233,9 @@ def manage_short_positions():
                             'reason': exit_reason,
                             'realized_pnl': round((pos['entry_price'] - curr_p) * pos['amount'], 4)})
 
+                # 撤銷所有掛單防鬼單
                 cancel_all_v5(s)
-                # 🚨 修復：絕對不刪除冷卻時間
+                if s in cooldown_tracker: del cooldown_tracker[s]
                 del positions[s]
     except Exception as e:
         if "10006" in str(e): time.sleep(5)
@@ -274,7 +249,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
         if time.time() < cooldown_tracker[symbol]:
             return
         else:
-            del cooldown_tracker[symbol] # 只有在這裡（時間到期）才可以刪除冷卻！
+            del cooldown_tracker[symbol]
 
     if not (is_weak and is_volatile and symbol not in positions): return
 
@@ -297,10 +272,11 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             logger.warning(f"⚠️ {symbol} 槓桿異常: {e}")
 
     try:
-        # 開空倉
+        # 第一步：開空倉
         order = exchange.create_order(symbol, 'limit', 'sell', amount, ioc_p, {'timeInForce': 'IOC', 'positionIdx': 0})
         time.sleep(1)
 
+        # 第二步：安全獲取實際成交價
         actual_price = ioc_p
         actual_amount = 0
 
@@ -322,6 +298,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             print(f"⏩ {symbol} IOC 未成交，撤退。")
             return
 
+        # 第三步：設置止盈止損
         tp_p = float(exchange.price_to_precision(symbol, actual_price - (TP_ATR_MULT * atr)))
         sl_p = float(exchange.price_to_precision(symbol, actual_price + (SL_ATR_MULT * atr)))
 
@@ -335,7 +312,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 
         positions[symbol] = {'amount': actual_amount, 'entry_price': actual_price, 'tp_price': tp_p, 'sl_price': sl_p,
                              'is_breakeven': False, 'atr': atr}
-        cooldown_tracker[symbol] = time.time() + 3600 # 嚴格賦予 1 小時冷卻
+        cooldown_tracker[symbol] = time.time() + 3600
 
         log_to_csv({'symbol': symbol, 'action': 'SHORT_ENTRY', 'price': actual_price, 'amount': actual_amount,
                     'trade_value': round(actual_amount * actual_price, 2), 'atr': round(atr, 4),
@@ -352,7 +329,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 # 5. 主程序
 # ==========================================
 def main():
-    print(f"🚀 AI 實戰 V6.0 FINAL SHORT (防連夾修復版) 啟動...")
+    print(f"🚀 AI 實戰 V6.0 FINAL SHORT (空軍完全體) 啟動...")
     last_scout_time = 0
     while True:
         try:
@@ -360,7 +337,7 @@ def main():
             curr_t = time.time()
             if curr_t - last_scout_time > SCOUTING_INTERVAL:
                 regime = get_btc_regime()
-                if regime == 1:
+                if regime == 1:  # 🟢 統一為綠燈 (1) 觸發行動
                     print("🟢 綠燈確認：執行空單海選掃描...")
                     target_coins = scouting_weak_coins(5)
                     for s in target_coins:
@@ -378,6 +355,7 @@ def main():
                 print(f"⏳ 空軍巡邏完畢 | 持倉: {list(positions.keys())} | 餘額: {get_live_usdt_balance():.2f}")
             time.sleep(POSITION_CHECK_INTERVAL)
 
+        # 確保 Ctrl+C 放喺前面，可以隨時手動停機
         except KeyboardInterrupt:
             print(f"\n👋 指揮官手動終止。餘額: {get_live_usdt_balance():.2f} USDT | 持倉: {list(positions.keys())}")
             sys.exit(0)
