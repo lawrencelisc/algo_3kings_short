@@ -25,7 +25,7 @@ exchange = ccxt.bybit({
 })
 exchange.load_markets()
 
-LOG_DIR = "core/result_short_live"
+LOG_DIR = "../core/result_short_live"
 LOG_FILE = f"{LOG_DIR}/09_live_short_log.csv"
 if not os.path.exists(LOG_DIR): os.makedirs(LOG_DIR)
 
