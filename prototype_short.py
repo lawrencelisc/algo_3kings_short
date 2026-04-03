@@ -37,6 +37,7 @@ NET_FLOW_SIGMA, TP_ATR_MULT, SL_ATR_MULT, TRAIL_ATR_MULT = 1.5, 1.5, 1.0, 1.0
 SCOUTING_INTERVAL = 120
 POSITION_CHECK_INTERVAL = 10
 MIN_NOTIONAL = 5.0
+MIN_IMBALANCE_RATIO = 0.2  # 要求的失衡比例 (可微調)
 
 BLACKLIST = [
     'USDC/USDT:USDT', 'DAI/USDT:USDT', 'FDUSD/USDT:USDT', 'BUSD/USDT:USDT',
@@ -223,34 +224,59 @@ def scouting_weak_coins(n=5):
 
 
 def apply_lee_ready_short_logic(symbol):
+    """Lee-Ready 資金流邏輯 + 訂單簿失衡度 (Imbalance) + P95濾網 [終極做空版]"""
     try:
-        ob = exchange.fetch_order_book(symbol)
+        # 1. 獲取訂單簿並計算失衡度 (Imbalance)
+        ob = exchange.fetch_order_book(symbol, limit=20)
         midpoint = (ob['bids'][0][0] + ob['asks'][0][0]) / 2
+
+        bid_vol = sum([b[1] for b in ob['bids']])
+        ask_vol = sum([a[1] for a in ob['asks']])
+        imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
+        imbalance = max(-1, min(1, imbalance))  # 防呆機制
+
+        # 2. 獲取交易歷史並計算 Tick 方向
         trades = exchange.fetch_trades(symbol, limit=200)
         df = pd.DataFrame(trades, columns=['price', 'amount', 'timestamp'])
         df['dir'] = np.where(df['price'] > midpoint, 1, np.where(df['price'] < midpoint, -1, 0))
         df['tick'] = df['price'].diff().apply(np.sign).replace(0, np.nan).ffill().fillna(0)
         df['final'] = np.where(df['dir'] != 0, df['dir'], df['tick'])
 
-        # 🚀 修正：使用「百分位數縮尾處理 (Winsorization)」消除單筆極端雜音
+        # 🚀 3. P95 縮尾處理 (Winsorization) - 過濾單一胖手指插針
         df['usd_val'] = df['amount'] * df['price']
-
-        # 計算這 200 筆交易的 95% 百分位數 (P95)。(即排除最高 5% 的極端值)
         p95 = df['usd_val'].quantile(0.95)
-
-        # 將所有大於 P95 的交易金額，強行「封頂」於 P95
         df['usd_val_clipped'] = df['usd_val'].clip(upper=p95)
 
-        # ❌ 舊代碼 (未過濾極端值，容易被假日單一插針扭曲)
-        # df['weighted_flow'] = df['final'] * df['amount'] * df['price']
-
-        # 🚀 修正：使用封頂後的金額來計算資金流，單筆異常大單將無法再引發假突破
+        # 計算資金淨流與標準差
         df['weighted_flow'] = df['final'] * df['usd_val_clipped']
         net_flow = df['weighted_flow'].sum()
+        flow_std = df['weighted_flow'].std()
 
-        is_weak = net_flow < -(df['weighted_flow'].std() * NET_FLOW_SIGMA)
+        # 🚀 4. 計算 Z-Score
+        if pd.isna(flow_std) or flow_std <= 0:
+            z_score = 0
+        else:
+            z_score = net_flow / flow_std
+            z_score = np.clip(z_score, -10, 10)
+
+        # 🚀 5. 綜合判定 (完全刪除 50000 Hardcode，100% 依賴動態科學指標！)
+        # MIN_IMBALANCE_RATIO = 0.2  # 要求的失衡比例 (可微調)
+
+        # 判斷邏輯：資金強烈流出 (z < -sigma) AND 賣盤牆壓頂 (imbalance < -0.2)
+        is_weak = (z_score < -NET_FLOW_SIGMA) and (imbalance < -MIN_IMBALANCE_RATIO)
+
+        # 6. 打印精準 Log
+        if is_weak:
+            print(
+                f"📉 {symbol} Short Validated | Z-Score: {z_score:.2f} | Imbalance: {imbalance:.2f} | P95 Cap: {p95:.0f}")
+        elif z_score < -NET_FLOW_SIGMA:
+            print(
+                f"⚠️ {symbol} Fake-Drop Prevented | Z-Score: {z_score:.2f} but Imbalance is {imbalance:.2f} (Buy Wall in the way)")
+
         return net_flow, df['price'].iloc[-1], is_weak
-    except:
+
+    except Exception as e:
+        # print(f"Error in short logic: {e}") # Debug 用
         return 0, 0, False
 
 
