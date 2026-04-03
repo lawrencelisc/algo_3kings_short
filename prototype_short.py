@@ -472,7 +472,8 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 # 5. 主程序
 # ==========================================
 def main():
-    print(f"🚀 AI 實戰 V6.0 FINAL SHORT (防連夾修復版) 啟動...")
+    print(f"🚀 AI 實戰 V6.0 FINAL SHORT 啟動...")
+    print(f"Lee-Ready 資金流邏輯 + 訂單簿失衡度 (Imbalance) + P95濾網 [終極做空版] 啟動...")
     last_scout_time = 0
     while True:
         try:
