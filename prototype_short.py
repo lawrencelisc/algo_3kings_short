@@ -645,32 +645,46 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 # ==========================================
 # 5. 主程序
 # ==========================================
+
 def main():
     print(f"🚀 AI 實戰 V6.0 FINAL SHORT 啟動...")
     print(f"Lee-Ready 資金流邏輯 + 訂單簿失衡度 (Imbalance) + P95濾網 [終極做空版] 啟動...")
     last_scout_time = 0
+
+    # 🚀 宣告一個空名單，防止啟動時報錯
+    target_coins = []
+
     while True:
         try:
             manage_short_positions()
             curr_t = time.time()
+
             if curr_t - last_scout_time > SCOUTING_INTERVAL:
                 regime = get_btc_regime()
+
                 if regime == 1:
                     print("🟢 綠燈確認：執行空單海選掃描...")
                     target_coins = scouting_weak_coins(5)
+
+                    # 🛡️ 確保這個 for 迴圈是在 if regime == 1 的縮排裡面！
                     for s in target_coins:
                         try:
                             flow, last_p, is_weak = apply_lee_ready_short_logic(s)
                             atr, is_v = get_market_metrics(s)
-                            if last_p > 0: execute_live_short(s, flow, last_p, is_weak, atr, is_v)
+                            if last_p > 0:
+                                execute_live_short(s, flow, last_p, is_weak, atr, is_v)
                         except Exception as e:
                             continue
                         time.sleep(0.5)
+
                 else:
                     print(f"🚦 目前導航狀態為 {regime}，海選暫停。")
+                    # 🚀 終極殺招：黃燈或紅燈時，強制清空孤兒名單！
+                    target_coins = []
 
                 last_scout_time = curr_t
                 print(f"⏳ 空軍巡邏完畢 | 持倉: {list(positions.keys())} | 餘額: {get_live_usdt_balance():.2f}")
+
             time.sleep(POSITION_CHECK_INTERVAL)
 
         except KeyboardInterrupt:
