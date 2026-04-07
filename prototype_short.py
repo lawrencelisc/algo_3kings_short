@@ -22,6 +22,7 @@ exchange = ccxt.bybit({
     'secret': API_SECRET,
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'}
+    'hostname': 'api.bytick.com'
 })
 exchange.load_markets()
 
@@ -47,9 +48,9 @@ WORKING_CAPITAL, MAX_LEVERAGE, RISK_PER_TRADE = 1000.0, 10.0, 0.01
 
 # 🚀 修正：大幣空軍專用設定 (專打 BTC, ETH, SOL 等流動性霸主)
 NET_FLOW_SIGMA, TP_ATR_MULT, SL_ATR_MULT, TRAIL_ATR_MULT = 1.2, 3.0, 1.5, 1.0
-MIN_IMBALANCE_RATIO = 0.15  # 大幣流動性好，15% 賣盤失衡已經夠力推跌
-SCOUTING_INTERVAL = 120
-POSITION_CHECK_INTERVAL = 10
+MIN_IMBALANCE_RATIO = 0.15          # 大幣流動性好，15% 賣盤失衡已經夠力推跌
+SCOUTING_INTERVAL = 125             # from 120 to 125
+POSITION_CHECK_INTERVAL = 12        # from 10 to 12
 MIN_NOTIONAL = 5.0
 
 BLACKLIST = [
