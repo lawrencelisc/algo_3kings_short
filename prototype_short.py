@@ -22,7 +22,7 @@ exchange = ccxt.bybit({
     'secret': API_SECRET,
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'},
-    'hostname': 'api.bytick.com',
+    'hostname': 'bytick.com',
 })
 exchange.load_markets()
 
