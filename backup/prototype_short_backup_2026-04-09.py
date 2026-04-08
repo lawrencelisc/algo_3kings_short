@@ -186,6 +186,56 @@ def get_3_layer_avg_price(symbol, side='bids'):
         return None
 
 
+# ==========================================
+# 2. 導航與海選 (Short)
+# ==========================================
+# def get_btc_regime():
+#     try:
+#         ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=60)
+#         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
+#         curr_p = df['c'].iloc[-1]
+#         sma20 = df['c'].rolling(20).mean().iloc[-1]
+#         sma50 = df['c'].rolling(50).mean().iloc[-1]
+#         target_short = sma20 * (1 - 0.0025)
+#
+#         cond_price = curr_p < target_short
+#         cond_trend = sma20 < sma50
+#
+#         tick_p = "✅" if cond_price else "❌"
+#         tick_t = "✅" if cond_trend else "❌"
+#
+#         # 🚦 統一燈號邏輯
+#         if cond_price and cond_trend:
+#             status, signal = "🟢 GREEN   (go strike)", 1
+#         elif cond_price or cond_trend:
+#             status, signal = "🟡 YELLOW  (standby for cond mis-matched)", 0
+#         else:
+#             status, signal = "🔴 RED     (stop & retreat)", -1
+#
+#         # 🚀 [新增] 將數據存入 CSV 供 Grafana 讀取
+#         report = {
+#             'btc_price': round(curr_p, 2),
+#             'target_price': round(target_short, 2),
+#             'sma20': round(sma20, 2),
+#             'sma50': round(sma50, 2),
+#             'signal_code': signal,
+#             'decision_text': status
+#         }
+#         log_status_to_csv(report)
+#
+#         print("-" * 60)
+#         print(f"📊 BTC 實時戰報 | 現價: {curr_p:.0f}")
+#         print(f"1️⃣ 價格門檻: 現價({curr_p:.0f}) < 目標({target_short:.0f}) {tick_p}")
+#         print(f"2️⃣ 趨勢確認: SMA20({sma20:.0f}) < SMA50({sma50:.0f}) {tick_t}")
+#         print(f"🚦 最終決策: {status}")
+#         print("-" * 60)
+#
+#         return signal
+#     except Exception as e:
+#         print(f"⚠️ 導航故障: {e}")
+#         return 0
+
+
 def get_btc_regime():
     """🚀 終極導航：HMA 交叉 + ADX 趨勢過濾 + 均量過濾"""
     try:
@@ -292,6 +342,35 @@ def get_btc_regime():
         return 0
 
 
+# def scouting_weak_coins(n=5):
+#     try:
+#         tickers = exchange.fetch_tickers()
+#
+#         # ❌ 舊代碼
+#         # data = [{'symbol': s, 'volume': t['quoteVolume'], 'change': t['percentage']}
+#         #         for s, t in tickers.items() if
+#         #         s.endswith(':USDT') and s not in BLACKLIST and t['percentage'] is not None]
+#
+#         # 🚀 修正：加入 Spread 過濾，拒絕流動性陷阱 (差價必須 < 0.15%)
+#         data = []
+#         for s, t in tickers.items():
+#             if s.endswith(':USDT') and s not in BLACKLIST and t['percentage'] is not None:
+#                 ask = t.get('ask')
+#                 bid = t.get('bid')
+#                 if ask and bid and bid > 0:
+#                     spread = (ask - bid) / bid
+#                     if spread < 0.0015:
+#                         data.append({'symbol': s, 'volume': t['quoteVolume'], 'change': t['percentage']})
+#
+#         df = pd.DataFrame(data)
+#         if df.empty: return []
+#
+#         return df.sort_values('volume', ascending=False).head(20).sort_values('change', ascending=True).head(n)[
+#             'symbol'].tolist()
+#     except Exception as e:
+#         print(f"⚠️ Scouting Error: {e}")
+#         return []
+
 def scouting_weak_coins(n=5):
     try:
         tickers = exchange.fetch_tickers()
@@ -319,6 +398,66 @@ def scouting_weak_coins(n=5):
         print(f"⚠️ Scouting Error: {e}")
         return []
 
+
+# def apply_lee_ready_short_logic(symbol):
+#     """Lee-Ready 資金流邏輯 + 訂單簿失衡度 (Imbalance) + P95濾網 [終極做空版]"""
+#     try:
+#         # 1. 獲取訂單簿並計算失衡度 (Imbalance)
+#         ob = exchange.fetch_order_book(symbol, limit=20)
+#         midpoint = (ob['bids'][0][0] + ob['asks'][0][0]) / 2
+#
+#         bid_vol = sum([b[1] for b in ob['bids']])
+#         ask_vol = sum([a[1] for a in ob['asks']])
+#         imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
+#         imbalance = max(-1, min(1, imbalance))  # 防呆機制
+#
+#         # 2. 獲取交易歷史並計算 Tick 方向
+#         trades = exchange.fetch_trades(symbol, limit=200)
+#         df = pd.DataFrame(trades, columns=['price', 'amount', 'timestamp'])
+#         df['dir'] = np.where(df['price'] > midpoint, 1, np.where(df['price'] < midpoint, -1, 0))
+#         df['tick'] = df['price'].diff().apply(np.sign).replace(0, np.nan).ffill().fillna(0)
+#         df['final'] = np.where(df['dir'] != 0, df['dir'], df['tick'])
+#
+#         # 🚀 3. P95 縮尾處理 (Winsorization) - 過濾單一胖手指插針
+#         df['usd_val'] = df['amount'] * df['price']
+#         p95 = df['usd_val'].quantile(0.95)
+#         df['usd_val_clipped'] = df['usd_val'].clip(upper=p95)
+#
+#         # 計算資金淨流與標準差
+#         df['weighted_flow'] = df['final'] * df['usd_val_clipped']
+#         net_flow = df['weighted_flow'].sum()
+#         flow_std = df['weighted_flow'].std()
+#
+#         # 🚀 4. 計算 Z-Score
+#         if pd.isna(flow_std) or flow_std <= 0:
+#             z_score = 0
+#         else:
+#             z_score = net_flow / flow_std
+#             z_score = np.clip(z_score, -10, 10)
+#
+#         # 🚀 5. 綜合判定 (完全刪除 50000 Hardcode，100% 依賴動態科學指標！)
+#         # MIN_IMBALANCE_RATIO = 0.2  # 要求的失衡比例 (可微調)
+#
+#         # 判斷邏輯：資金強烈流出 (z < -sigma) AND 賣盤牆壓頂 (imbalance < -0.2)
+#         is_weak = (z_score < -NET_FLOW_SIGMA) and (imbalance < -MIN_IMBALANCE_RATIO)
+#
+#         # 6. 打印精準 Log
+#         if is_weak:
+#             print(
+#                 f"📉 {symbol} Short Validated | Z-Score: {z_score:.2f} | Imbalance: {imbalance:.2f} | P95 Cap: {p95:.0f}")
+#         elif z_score < -NET_FLOW_SIGMA:
+#             print(
+#                 f"⚠️ {symbol} Fake-Drop Prevented | Z-Score: {z_score:.2f} but Imbalance is {imbalance:.2f} (Buy Wall in the way)")
+#
+#         return net_flow, df['price'].iloc[-1], is_weak
+#
+#     except Exception as e:
+#         # print(f"Error in short logic: {e}") # Debug 用
+#         return 0, 0, False
+
+
+# def apply_lee_ready_short_logic(symbol):
+#     ... (您原本的代碼) ...
 
 # 🚀 新增：Short 版專用反向 Lee-Ready 狙擊模式 (含大單加權、加速度與防托盤陷阱)
 def apply_lee_ready_short_logic(symbol):
@@ -393,6 +532,16 @@ def manage_short_positions():
         live_symbols = {p['symbol']: p for p in live_positions_raw if
                         float(p.get('contracts', 0) or p.get('size', 0)) > 0}
 
+        # for s in list(positions.keys()):
+        #     if s not in live_symbols:
+        #         print(f"🧹 交易所已自動平倉 (TP/SL)，清理本地紀錄: {s}")
+        #
+        #         # 🚀 執行新版精準會計模組
+        #         process_native_exit_log(s, positions[s], position_type='short')
+        #         cancel_all_v5(s)
+        #
+        #         del positions[s]
+        #         continue
         for s in list(positions.keys()):
             if s not in live_symbols:
                 print(f"🧹 交易所已自動平倉，處理真實 PnL 結算單: {s}")
@@ -575,10 +724,20 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
                     break
 
         if actual_amount == 0:
+            # ❌ 舊代碼
+            # print(f"⏩ {symbol} IOC 未成交，撤退。")
+            # return
+
+            # 🚀 修正：強化 IOC 未成交防禦，執行核彈撤單
             print(f"⏩ {symbol} IOC 未成交或數量為 0，執行核彈撤單並退出。")
             cancel_all_v5(symbol)
             return
 
+        # 🛠️ 舊代碼保留
+        # tp_p = float(exchange.price_to_precision(symbol, actual_price - (TP_ATR_MULT * atr)))
+        # sl_p = float(exchange.price_to_precision(symbol, actual_price + (SL_ATR_MULT * atr)))
+
+        # 🚀 新增：計算反向 TP/SL，並加入 0.3% 利潤防呆機制 (防手續費黑洞)
         tp_p = float(exchange.price_to_precision(symbol, actual_price - (TP_ATR_MULT * atr)))
         sl_p = float(exchange.price_to_precision(symbol, actual_price + (SL_ATR_MULT * atr)))
 
