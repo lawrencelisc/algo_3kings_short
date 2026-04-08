@@ -26,8 +26,8 @@ exchange = ccxt.bybit({
 })
 exchange.load_markets()
 
-LOG_DIR = "result"
-STATUS_DIR = "status"
+LOG_DIR = "../result"
+STATUS_DIR = "../status"
 LOG_FILE = f"{LOG_DIR}/live_short_log.csv"
 STATUS_FILE = f"{STATUS_DIR}/btc_regime_short.csv"
 
