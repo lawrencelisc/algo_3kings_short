@@ -22,7 +22,7 @@ exchange = ccxt.bybit({
     'secret': API_SECRET,
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'},
-    'hostname': 'bytick.com',
+    # 'hostname': 'bytick.com',
 })
 exchange.load_markets()
 
@@ -284,17 +284,22 @@ def get_btc_regime():
         cond_adx = adx_val > 22
 
         # ==========================================
-        # 3️⃣ 成交量濾網：當前 1 小時量 > 20小時均量
+        # 3️⃣ 成交量濾網 (抗極端值優化版)：24H 中位數 (Median)
         # ==========================================
-        sma_v_20 = df['v'].rolling(20).mean().iloc[-1]
-        cond_vol = curr_v > sma_v_20
+        # 改用 24 小時中位數，完美無視單一巨量插針的干擾
+        median_v_24 = df['v'].rolling(24).median().iloc[-1]
+
+        # 動能容錯：只需要大於中位數的 80% (0.8)，就視為有足夠健康動能
+        target_vol = median_v_24 * 0.8
+        cond_vol = curr_v > target_vol
 
         # ==========================================
         # 4️⃣ 整合訊號與輸出
         # ==========================================
         tick_t = "✅" if cond_trend else "❌"
         tick_a = f"✅ (ADX: {adx_val:.1f})" if cond_adx else f"❌ (ADX: {adx_val:.1f})"
-        tick_v = f"✅ (Vol: {curr_v:.0f} > {sma_v_20:.0f})" if cond_vol else f"❌ (Vol: {curr_v:.0f} < {sma_v_20:.0f})"
+        tick_v = f"✅ (Vol: {curr_v:.0f} > 目標:{target_vol:.0f})" \
+            if cond_vol else f"❌ (Vol: {curr_v:.0f} < 目標:{target_vol:.0f})"
 
         # 必須三個條件同時滿足才開綠燈
         if cond_trend and cond_adx and cond_vol:
@@ -309,7 +314,7 @@ def get_btc_regime():
             'btc_price': round(curr_p, 2),
             'target_price': round(hma50_val, 2),
             'sma20': round(hma20_val, 2),
-            'sma50': round(adx_val, 2),  # 借用位置記錄 ADX
+            'adx': round(adx_val, 2),  # 借用位置記錄 ADX
             'signal_code': signal,
             'decision_text': status
         }
@@ -319,7 +324,7 @@ def get_btc_regime():
         print(f"📊 BTC 實時戰報 (HMA+ADX+Vol版) | 現價: {curr_p:.0f}")
         print(f"1️⃣ 極速趨勢: HMA20({hma20_val:.0f}) < HMA50({hma50_val:.0f}) {tick_t}")
         print(f"2️⃣ 趨勢強度: ADX > 22 {tick_a}")
-        print(f"3️⃣ 動能確認: 當前成交量 > 20H均量 {tick_v}")
+        print(f"3️⃣ 動能確認: 當前量 > 24H中位數(80%) {tick_v}")
         print(f"🚦 最終決策: {status}")
         print("-" * 60)
 
