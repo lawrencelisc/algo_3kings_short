@@ -39,6 +39,9 @@ positions, cooldown_tracker = {}, {}
 # 👑 策略參數 (做空版)
 WORKING_CAPITAL, MAX_LEVERAGE, RISK_PER_TRADE = 1000.0, 10.0, 0.01
 
+# 🚀 新增：第一優先防護網 - 單筆最大名義價值上限 (防止 ATR 過低導致買入天文數字)
+MAX_NOTIONAL_PER_TRADE = 200.0
+
 # ❌ 舊代碼保留
 # NET_FLOW_SIGMA, TP_ATR_MULT, SL_ATR_MULT, TRAIL_ATR_MULT = 1.5, 1.5, 1.0, 1.0
 # SCOUTING_INTERVAL = 120
@@ -172,7 +175,11 @@ def get_market_metrics(symbol):
                               np.maximum(abs(df['h'] - df['c'].shift(1)), abs(df['l'] - df['c'].shift(1))))
         atr = df['tr'].rolling(14, min_periods=1).mean().iloc[-1]
         if pd.isna(atr) or atr == 0: return None, False
-        return atr, (atr / df['c'].iloc[-1]) > 0.0005
+
+        # ❌ 舊代碼保留
+        # return atr, (atr / df['c'].iloc[-1]) > 0.0005
+        # 🚀 修正：第二優先防護網 - 提高 ATR 最小值過濾 (死魚幣過濾)，波幅 < 0.15% 直接放棄
+        return atr, (atr / df['c'].iloc[-1]) > 0.0015
     except:
         return None, False
 
@@ -517,7 +524,13 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
     cancel_all_v5(symbol)
     actual_bal = get_live_usdt_balance()
     eff_bal = min(WORKING_CAPITAL, actual_bal)
-    trade_val = min((eff_bal * RISK_PER_TRADE) / (atr / current_price), eff_bal * MAX_LEVERAGE * 0.95)
+
+    # ❌ 舊代碼保留
+    # trade_val = min((eff_bal * RISK_PER_TRADE) / (atr / current_price), eff_bal * MAX_LEVERAGE * 0.95)
+    # 🚀 修正：加入 MAX_NOTIONAL_PER_TRADE 硬性截斷，防止低 ATR 導致天文數字倉位 (防護網 1)
+    trade_val = min((eff_bal * RISK_PER_TRADE) / (atr / current_price), eff_bal * MAX_LEVERAGE * 0.95,
+                    MAX_NOTIONAL_PER_TRADE)
+
     amount = float(exchange.amount_to_precision(symbol, trade_val / current_price))
 
     if amount < exchange.markets[symbol]['limits']['amount']['min']: return
@@ -619,7 +632,11 @@ def main():
 
                 if regime == 1:
                     print("🟢 綠燈確認：執行空單海選掃描...")
-                    target_coins = scouting_weak_coins(5)
+
+                    # ❌ 舊代碼保留
+                    # target_coins = scouting_weak_coins(5)
+                    # 🚀 修正：按你要求，確認將大幣海選數量改為 20 名做空
+                    target_coins = scouting_weak_coins(20)
 
                     # 🛡️ 確保這個 for 迴圈是在 if regime == 1 的縮排裡面！
                     for s in target_coins:
