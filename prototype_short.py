@@ -421,33 +421,9 @@ def manage_short_positions():
                 pos['max_pnl_pct'] = pnl_pct
             pos['max_pnl_pct'] = max(pos['max_pnl_pct'], pnl_pct)
 
-            # ❌ 舊代碼
+            # ❌ 舊代碼保留
             # if not pos['is_breakeven'] and pnl_pct > 0.003:
             #     pos['sl_price'], pos['is_breakeven'], sl_updated = pos['entry_price'] * 0.9998, True, True
-
-            # 🚀 修正：0.15% (0.9985) 確保能完全覆蓋 Bybit 雙向 Taker 手續費 (0.11%) 及潛在滑價
-            # if not pos['is_breakeven'] and pnl_pct > 0.003:
-            #     pos['sl_price'], pos['is_breakeven'], sl_updated = pos['entry_price'] * 0.9985, True, True
-            #
-            # if pos['is_breakeven']:
-            #     trail_sl = curr_p + (TRAIL_ATR_MULT * pos['atr'])
-            #     if trail_sl < pos['sl_price']:
-            #         pos['sl_price'], sl_updated = trail_sl, True
-            #
-            # if sl_updated:
-            #     f_sl = exchange.price_to_precision(s, pos['sl_price'])
-            #     try:
-            #         exchange.private_post_v5_position_trading_stop(
-            #             {'category': 'linear', 'symbol': exchange.market_id(s), 'stopLoss': str(f_sl),
-            #              'tpslMode': 'Full', 'positionIdx': 0})
-            #     except:
-            #         pass
-            #
-            # exit_reason = None
-            # if curr_p <= pos['tp_price']:
-            #     exit_reason = "TP (Short IOC Exit)"
-            # elif curr_p >= pos['sl_price'] and not pos['is_breakeven']:
-            #     exit_reason = "SL (Short IOC Exit)"
 
             # 🚀 新增：優化 Short Trail SL 頻率控制 + 喚醒本地 IOC 平倉機制
             if not pos['is_breakeven'] and pnl_pct > 0.003:
@@ -470,8 +446,12 @@ def manage_short_positions():
                     exchange.private_post_v5_position_trading_stop(
                         {'category': 'linear', 'symbol': exchange.market_id(s), 'stopLoss': str(f_sl),
                          'tpslMode': 'Full', 'positionIdx': 0})
-                except:
-                    pass
+                # ❌ 舊代碼保留
+                # except:
+                #     pass
+                # 🚀 修正：捕獲 API 報錯並印出，防止被 Rate Limit 或其他錯誤蒙蔽
+                except Exception as e:
+                    logger.warning(f"⚠️ {s} 追蹤止損 API 更新失敗 (本地腦海仍保持最新): {e}")
 
             exit_reason = None
 
