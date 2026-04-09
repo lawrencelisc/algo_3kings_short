@@ -327,6 +327,12 @@ def apply_lee_ready_short_logic(symbol):
         df['weight'] = np.where(df['amount'] > avg_vol * 2, 2.0, 1.0)
         df['net_flow'] = df['direction'] * df['amount'] * df['price'] * df['weight']
 
+        # 🚀 ✂️ [新增防護] 極端值截斷 (Ghosting Effect 幽靈效應防護)
+        # 消除陳年巨鯨單對標準差的長久污染，令系統保持剛開機的高敏銳狀態！
+        lower_bound = df['net_flow'].quantile(0.02)                             # 找出底部 2% 的極端負值邊界
+        upper_bound = df['net_flow'].quantile(0.98)                             # 找出頂部 2% 的極端正值邊界
+        df['net_flow'] = np.clip(df['net_flow'], lower_bound, upper_bound)      # 強制將超標數值壓縮在此區間內
+
         # 計算資金流與加速度
         short_window_flow = df['net_flow'].tail(50).sum()
         acceleration = df['net_flow'].tail(25).sum() - df['net_flow'].iloc[-50:-25].sum()
