@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('AlgoTrade_Short_V6.0')
 
 # ⚠️ 請確保 API 金鑰正確
-API_KEY = "1VjRtJ4cjuJiFk2wFs"
-API_SECRET = "s5N38enwd75l0CxvIFLPFWWWmAbj2YxK941j"
+API_KEY = ""
+API_SECRET = ""
 
 exchange = ccxt.bybit({
     'apiKey': API_KEY,
@@ -26,8 +26,8 @@ exchange = ccxt.bybit({
 })
 exchange.load_markets()
 
-LOG_DIR = "result"
-STATUS_DIR = "status"
+LOG_DIR = "../result"
+STATUS_DIR = "../status"
 LOG_FILE = f"{LOG_DIR}/live_short_log.csv"
 STATUS_FILE = f"{STATUS_DIR}/btc_regime_short.csv"
 
@@ -317,11 +317,14 @@ def scouting_weak_coins(n=5):
         if df.empty: return []
 
         # 🚀 大幣專屬：全市場成交量 Top 20% 先有資格入選
-        dynamic_min_volume = df['volume'].quantile(0.8)
-        df_filtered = df[df['volume'] >= dynamic_min_volume]
+        # dynamic_min_volume = df['volume'].quantile(0.8)
+        # df_filtered = df[df['volume'] >= dynamic_min_volume]
 
-        # 尋找跌得最勁 (最弱勢) 的幣種
-        return df_filtered.sort_values('change', ascending=True).head(n)['symbol'].tolist()
+        # 1. 按 24 小時成交額 (volume) 由高至低排，強制只抽取全市場 Top 20 隻巨無霸
+        top_20_majors = df.sort_values('volume', ascending=False).head(20)
+        # 2. 喺呢 20 隻保證走得甩嘅大幣入面，按跌幅 (change) 排列，由最弱勢開始狙擊
+        return top_20_majors.sort_values('change', ascending=True).head(n)['symbol'].tolist()
+
     except Exception as e:
         print(f"⚠️ Scouting Error: {e}")
         return []
