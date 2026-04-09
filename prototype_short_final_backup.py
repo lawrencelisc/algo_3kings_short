@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('AlgoTrade_Short_V6.0')
 
 # ⚠️ API 金鑰配置 (請確保安全)
-API_KEY = "1VjRtJ4cjuJiFk2wFs"
-API_SECRET = "s5N38enwd75l0CxvIFLPFWWWmAbj2YxK941j"
+API_KEY = ""
+API_SECRET = ""
 
 exchange = ccxt.bybit({
     'apiKey': API_KEY,
@@ -85,7 +85,8 @@ BLACKLIST = [
 CSV_COLUMNS = ['timestamp', 'symbol', 'action', 'price', 'amount', 'trade_value', 'atr', 'net_flow', 'tp_price',
                'sl_price', 'reason', 'realized_pnl', 'actual_balance', 'effective_balance']
 
-STATUS_COLUMNS = ['timestamp', 'btc_price', 'target_price', 'hma20', 'hma50', 'adx', 'signal_code', 'decision_text']
+STATUS_COLUMNS = ['timestamp', 'btc_price', 'target_price', 'sma20', 'sma50', 'signal_code', 'decision_text']
+
 
 # ==========================================
 # 🛠️ [輔助模組] 記錄、帳戶與訂單管理
@@ -238,9 +239,8 @@ def get_btc_regime():
         atr_14 = df['tr'].ewm(alpha=1 / 14, adjust=False).mean()
         plus_di = 100 * (pd.Series(df['+dm']).ewm(alpha=1 / 14, adjust=False).mean() / atr_14)
         minus_di = 100 * (pd.Series(df['-dm']).ewm(alpha=1 / 14, adjust=False).mean() / atr_14)
-        denominator = plus_di + minus_di
-        dx = np.where(denominator != 0, 100 * abs(plus_di - minus_di) / denominator, 0)
-        adx_val = pd.Series(dx).ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx_val = dx.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
         cond_adx = adx_val > 22
 
         # --- 3️⃣ 成交量濾網 (抗極端值優化版) ---
@@ -262,7 +262,7 @@ def get_btc_regime():
 
         log_status_to_csv({
             'btc_price': round(curr_p, 2), 'target_price': round(hma50_val, 2),
-            'hma20': round(hma20_val, 2), 'hma50': round(hma50_val, 2), 'adx': round(adx_val, 2),
+            'sma20': round(hma20_val, 2), 'adx': round(adx_val, 2),
             'signal_code': signal, 'decision_text': status
         })
 
@@ -341,11 +341,9 @@ def apply_lee_ready_short_logic(symbol):
             imbalance = 0
 
         is_weak = False
-        if df['net_flow'].std() > 0:
-            z_score = short_window_flow / (df['net_flow'].std() * np.sqrt(50))
-        else:
-            z_score = 0
+        z_score = short_window_flow / df['net_flow'].std() if df['net_flow'].std() > 0 else 0
 
+        # --- 狙擊條件判斷 ---
         if (short_window_flow < 0) and (acceleration < 0) and (imbalance < -0.15):
             is_weak = True
             print(f"🔥 {symbol} Short Sniper! Accel: {acceleration:.0f} | Imbalance: {imbalance:.2f}")
@@ -563,11 +561,7 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
         # 預期利潤防護：空間太細連手續費都唔夠俾
         expected_profit_margin = (actual_price - tp_p) / actual_price
         if expected_profit_margin < 0.003:
-            print(f"🟡 放棄做空 [{symbol}]: 預期利潤空間 ({expected_profit_margin * 100:.2f}%) 太細，立即市價平倉！")
-            try:
-                exchange.create_market_buy_order(symbol, actual_amount, {'reduceOnly': True})
-            except Exception as e:
-                logger.error(f"❌ 緊急平倉失敗！需人工介入: {e}")
+            print(f"🟡 放棄做空 [{symbol}]: 預期利潤空間 ({expected_profit_margin * 100:.2f}%) 太細！")
             cancel_all_v5(symbol)
             return
 

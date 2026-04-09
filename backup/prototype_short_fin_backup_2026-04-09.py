@@ -492,7 +492,7 @@ def manage_short_positions():
                     # 🚀 修正：降低更新門檻 (從 0.2% 降到 0.05%)，解決 Bybit 止損單更新不及時問題
                     if (pos['sl_price'] - trail_sl) / pos['sl_price'] > 0.0005:
                         sl_updated = True
-                    pos['sl_price'] = trail_sl  # 但本地腦海中永遠維持最新線位
+                        pos['sl_price'] = trail_sl  # 但本地腦海中永遠維持最新線位
 
             if sl_updated:
                 f_sl = exchange.price_to_precision(s, pos['sl_price'])
