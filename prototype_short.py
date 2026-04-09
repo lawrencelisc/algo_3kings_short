@@ -299,6 +299,53 @@ def get_btc_regime():
         return 0
 
 
+# 🚀 新增：啟動時同步交易所真實倉位 (防止重啟導致孤兒倉)
+def sync_positions_on_startup():
+    print("🔄 正在同步交易所現有倉位...")
+    try:
+        live_positions_raw = exchange.fetch_positions()
+        # 篩選出所有數量大於 0 的真實倉位
+        live_symbols = [p for p in live_positions_raw if float(p.get('contracts', 0) or p.get('size', 0)) > 0]
+
+        recovered_count = 0
+        for p in live_symbols:
+            symbol = p['symbol']
+            # 只恢復空單 (short)，如果你同時有跑 long，可能需要額外區分 side
+            if p.get('side') == 'sell' or float(p.get('positionValue', 0)) < 0 or (
+                    p.get('info') and p['info'].get('side') == 'Sell'):
+
+                entry_price = float(p.get('entryPrice', 0))
+                amount = float(p.get('contracts', 0) or p.get('size', 0))
+
+                # 嘗試讀取交易所現有的 SL/TP，如果沒有就重新計算一個安全的初始值
+                sl_p = float(p.get('stopLoss', 0))
+                tp_p = float(p.get('takeProfit', 0))
+
+                # 若獲取不到歷史 ATR，給予預設假值 (後續迴圈會更新)
+                atr, _ = get_market_metrics(symbol)
+                if not atr: atr = entry_price * 0.01
+
+                if sl_p == 0: sl_p = float(exchange.price_to_precision(symbol, entry_price + (SL_ATR_MULT * atr)))
+                if tp_p == 0: tp_p = float(exchange.price_to_precision(symbol, entry_price - (TP_ATR_MULT * atr)))
+
+                # 寫回本地記憶體
+                positions[symbol] = {
+                    'amount': amount,
+                    'entry_price': entry_price,
+                    'tp_price': tp_p,
+                    'sl_price': sl_p,
+                    'is_breakeven': False,
+                    'atr': atr,
+                    'max_pnl_pct': 0.0  # 重啟時重新計算最高利潤
+                }
+                recovered_count += 1
+                print(f"✅ 成功尋回孤兒空單: {symbol} | 入場價: {entry_price}")
+
+        print(f"🔄 同步完成！共尋回 {recovered_count} 個倉位。")
+    except Exception as e:
+        logger.error(f"❌ 啟動同步失敗: {e}")
+
+
 def scouting_weak_coins(n=5):
     try:
         tickers = exchange.fetch_tickers()
@@ -617,6 +664,8 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 def main():
     print(f"🚀 AI 實戰 V6.0 FINAL SHORT 啟動...")
     print(f"Lee-Ready 資金流邏輯 + 訂單簿失衡度 (Imbalance) + P95濾網 [終極做空版] 啟動...")
+
+    sync_positions_on_startup()
     last_scout_time = 0
 
     # 🚀 宣告一個空名單，防止啟動時報錯
