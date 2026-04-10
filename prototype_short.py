@@ -201,7 +201,7 @@ def get_btc_regime():
     try:
         ohlcv = exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='15m', limit=150)
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
-        curr_p, curr_v = df['c'].iloc[-1], df['v'].iloc[-1]
+        curr_p = df['c'].iloc[-1]  # 🚀 刪除了會隨時間歸零的 curr_v
 
         # --- 1️⃣ 極速趨勢引擎：計算 HMA 20 與 HMA 50 ---
         def calc_hma(s, period):
@@ -218,6 +218,8 @@ def get_btc_regime():
 
         df['hma20'], df['hma50'] = calc_hma(df['c'], 20), calc_hma(df['c'], 50)
         hma20_val, hma50_val = df['hma20'].iloc[-1], df['hma50'].iloc[-1]
+
+        # ⚠️ 這裡保留空軍 (Short) 邏輯。若是 Long 版請改為 hma20_val > hma50_val
         cond_trend = hma20_val < hma50_val
 
         # --- 2️⃣ 趨勢強度濾網：計算 ADX (14) ---
@@ -236,15 +238,19 @@ def get_btc_regime():
         adx_val = pd.Series(dx).ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
         cond_adx = adx_val > 22
 
-        # --- 3️⃣ 成交量濾網 (抗極端值優化版) ---
-        median_v_24 = df['v'].rolling(24).median().iloc[-1]
+        # --- 3️⃣ 成交量濾網 (抗極端值優化版 - 已修復未收盤陷阱) ---
+        # 🚀 改用「上一根已完整收盤」的 K 線 (-2)，避開當前 K 線歸零問題
+        completed_v = df['v'].iloc[-2]
+        # 🚀 計算過去 24 根「已收盤」K 線的中位數 (避開最後一根未完成的)
+        median_v_24 = df['v'].iloc[-25:-1].median()
         target_vol = median_v_24 * 0.8
-        cond_vol = curr_v > target_vol
+        cond_vol = completed_v > target_vol
 
         # --- 4️⃣ 整合訊號與輸出 ---
         tick_t = "✅" if cond_trend else "❌"
         tick_a = f"✅ (ADX: {adx_val:.1f})" if cond_adx else f"❌ (ADX: {adx_val:.1f})"
-        tick_v = f"✅ (Vol: {curr_v:.0f} > 目標:{target_vol:.0f})" if cond_vol else f"❌ (Vol: {curr_v:.0f} < 目標:{target_vol:.0f})"
+        # 🚀 顯示 completed_v 而不是會歸零的 curr_v
+        tick_v = f"✅ (Vol: {completed_v:.0f} > 目標:{target_vol:.0f})" if cond_vol else f"❌ (Vol: {completed_v:.0f} < 目標:{target_vol:.0f})"
 
         if cond_trend and cond_adx and cond_vol:
             status, signal = "🟢 GREEN   (Trend, ADX & Vol Validated)", 1
@@ -263,7 +269,7 @@ def get_btc_regime():
         print(f"📊 BTC 實時戰報 (HMA+ADX+Vol版) | 現價: {curr_p:.0f}")
         print(f"1️⃣ 極速趨勢: HMA20({hma20_val:.0f}) < HMA50({hma50_val:.0f}) {tick_t}")
         print(f"2️⃣ 趨勢強度: ADX > 22 {tick_a}")
-        print(f"3️⃣ 動能確認: 當前量 > 24H中位數(80%) {tick_v}")
+        print(f"3️⃣ 動能確認: 上根已收盤量 > 24H中位數(80%) {tick_v}")
         print(f"🚦 最終決策: {status}")
         print("-" * 60)
 
