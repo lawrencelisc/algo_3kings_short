@@ -53,7 +53,7 @@ MAX_NOTIONAL_PER_TRADE = 200.0
 # --- 大幣空軍專用設定 (專打流動性霸主) ---
 NET_FLOW_SIGMA = 1.2                                    # 資金流偏離度觸發門檻
 TP_ATR_MULT = 5.0                                       # 止盈 ATR 倍數 🚀 放闊止盈 (由 3.0 改 5.0)，讓暴跌利潤奔跑
-SL_ATR_MULT = 1.0                                       # 初始止損 ATR 倍數 🚀 收緊止損 (由 1.5 改 1.0)，見勢色唔對即刻斬！
+SL_ATR_MULT = 0.8                                       # 初始止損 ATR 倍數 🚀 收緊止損 (由 1.5 改 0.8)，見勢色唔對即刻斬！
 # TRAIL_ATR_MULT = 1.0                                  # 追蹤止損 ATR 步進倍數
 MIN_IMBALANCE_RATIO = 0.2                               # 訂單簿失衡度門檻 (賣盤需厚於買盤 15%)
 
