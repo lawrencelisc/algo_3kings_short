@@ -304,6 +304,40 @@ def scouting_weak_coins(n=20):
         return []
 
 
+def check_flow_reversal(symbol):
+    """【防守專用 - 空單版】輕量級資金流反轉檢測 (防挾空倉雷達)"""
+    try:
+        trades = exchange.fetch_trades(symbol, limit=100)
+        if not trades or len(trades) < 50: return False
+
+        df = pd.DataFrame(trades)
+        df['price_change'] = df['price'].diff()
+        df['direction'] = np.where(df['price_change'] > 0, 1, np.where(df['price_change'] < 0, -1, 0))
+        df['direction'] = df['direction'].replace(0, np.nan).ffill().fillna(0)
+
+        # 瞬時資金流 (加權)
+        avg_vol = df['amount'].mean()
+        df['weight'] = np.where(df['amount'] > avg_vol * 2, 2.0, 1.0)
+        df['net_flow'] = df['direction'] * df['amount'] * df['price'] * df['weight']
+
+        flow_mean = df['net_flow'].mean()
+        flow_std = df['net_flow'].std()
+
+        if flow_std == 0: return False
+
+        recent_25_flow = df['net_flow'].tail(25).sum()
+        z_score = (recent_25_flow - (flow_mean * 25)) / (flow_std * np.sqrt(25))
+
+        # 🚀 空單特化防線：嚴格閾值 +3.0 Sigma (偵測到極端連續買盤，即刻斬！)
+        if z_score > 3.0:
+            print(f"🚨 {symbol} 偵測到極端挾空買盤資金流！Z-Score: {z_score:.2f}")
+            return True
+
+        return False
+    except Exception as e:
+        return False
+
+
 def apply_lee_ready_short_logic(symbol):
     """反向 Lee-Ready 狙擊模式 (含大單加權、加速度與防托盤陷阱)"""
     try:
@@ -390,7 +424,7 @@ def sync_positions_on_startup():
 
                 positions[symbol] = {
                     'amount': amount, 'entry_price': entry_price, 'tp_price': tp_p, 'sl_price': sl_p,
-                    'is_breakeven': is_be, 'atr': atr, 'max_pnl_pct': 0.0
+                    'is_breakeven': is_be, 'atr': atr, 'max_pnl_pct': 0.0, 'entry_time': time.time()
                 }
                 recovered_count += 1
                 print(f"✅ 成功尋回孤兒空單: {symbol} | 入場價: {entry_price} | 已保本狀態: {is_be}")
@@ -468,6 +502,17 @@ def manage_short_positions():
                     logger.warning(f"⚠️ {s} 追蹤止損 API 更新失敗 (本地腦海仍保持最新): {e}")
 
             exit_reason = None
+            # 🚀 獲取持倉時間
+            time_held = time.time() - pos.get('entry_time', time.time())
+
+            # 🚀 第 1 重防護：聰明時間止損 (空單版 - 跌唔落就走)
+            if not exit_reason and time_held > 180 and pnl_pct < 0.005:
+                exit_reason = "Time Stop (Failed to dump)"
+
+            # 🚀 第 2 重防護：資金流反轉檢測 (只在未保本且處於虧損時檢查)
+            if not exit_reason and not pos['is_breakeven'] and pnl_pct < 0:
+                if check_flow_reversal(s):
+                    exit_reason = "Flow Reversal (Smart Exit)"
 
             # 常規本地 TP/SL 檢查 (取代舊版 Profit Retrace Lock)
             if not exit_reason:
