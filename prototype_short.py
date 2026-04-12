@@ -507,7 +507,7 @@ def manage_short_positions():
                 side = p.get('side', '').lower()
                 info_side = p.get('info', {}).get('side', '').lower()
 
-                if side in ['long', 'buy'] or info_side in ['buy', 'long']:
+                if side in ['short', 'sell'] or info_side in ['sell', 'short']:
                     entry_p = float(p.get('entryPrice', 0))
                     amt = float(p.get('contracts', 0) or p.get('size', 0))
                     atr, _ = get_market_metrics(s)
@@ -525,18 +525,21 @@ def manage_short_positions():
                     sl_p = float(p.get('stopLoss') or 0)
                     tp_p = float(p.get('takeProfit') or 0)
 
-                    if sl_p == 0: sl_p = float(exchange.price_to_precision(s, entry_p - (SL_ATR_MULT * atr)))
-                    if tp_p == 0: tp_p = float(exchange.price_to_precision(s, entry_p + (TP_ATR_MULT * atr)))
-                    is_be = True if sl_p > entry_p else False
+                    # ✅ 修復：空單 SL 在入場價上方，TP 在入場價下方
+                    if sl_p == 0: sl_p = float(exchange.price_to_precision(s, entry_p + (SL_ATR_MULT * atr)))
+                    if tp_p == 0: tp_p = float(exchange.price_to_precision(s, entry_p - (TP_ATR_MULT * atr)))
+
+                    # ✅ 修復：空單保本 = 止損已移到入場價下方（鎖住利潤）
+                    is_be = True if (sl_p < entry_p and sl_p > 0) else False
 
                     # 寫入腦海，正式接管
                     positions[s] = {
                         'amount': amt, 'entry_price': entry_p, 'tp_price': tp_p, 'sl_price': sl_p,
                         'is_breakeven': is_be, 'atr': atr, 'max_pnl_pct': 0.0,
-                        # 🛠️ V6.3 修改：將原本的 time.time() 改為 real_entry_time
                         'entry_time': real_entry_time
                     }
-                    print(f"🚨 [系統自癒] 發現並自動接管孤兒多單: {s} | 入場價: {entry_p} | 數量: {amt}")
+                    # ✅ 修復：日誌改為空單
+                    print(f"🚨 [系統自癒] 發現並自動接管孤兒空單: {s} | 入場價: {entry_p} | 已保本狀態: {is_be}")
         # ==========================================
 
         # 1. 處理已經被交易所平倉的訂單
