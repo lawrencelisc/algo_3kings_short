@@ -26,8 +26,8 @@ exchange = ccxt.bybit({
 exchange.load_markets()
 
 # 檔案與路徑設定
-LOG_DIR = "../result"
-STATUS_DIR = "../status"
+LOG_DIR = "result"
+STATUS_DIR = "status"
 LOG_FILE = f"{LOG_DIR}/live_short_log.csv"
 STATUS_FILE = f"{STATUS_DIR}/btc_regime_short.csv"
 
@@ -345,7 +345,7 @@ def scouting_weak_coins(scouting_coins=20):
 
 
 def check_flow_health(symbol):
-    """【防守專用】資金流健康雷達：反轉(Reversal)與衰退(Deceleration)檢測 (V6.4)"""
+    """【防守專用 - 空單版】資金流健康雷達：挾空(Squeeze)與跌勢衰退(Deceleration)檢測"""
     try:
         trades = exchange.fetch_trades(symbol, limit=100)
         if not trades or len(trades) < 50: return None
@@ -355,7 +355,6 @@ def check_flow_health(symbol):
         df['direction'] = np.where(df['price_change'] > 0, 1, np.where(df['price_change'] < 0, -1, 0))
         df['direction'] = df['direction'].replace(0, np.nan).ffill().fillna(0)
 
-        # 瞬時資金流 (加權)
         avg_vol = df['amount'].mean()
         df['weight'] = np.where(df['amount'] > avg_vol * 2, 2.0, 1.0)
         df['net_flow'] = df['direction'] * df['amount'] * df['price'] * df['weight']
@@ -363,33 +362,28 @@ def check_flow_health(symbol):
         flow_std = df['net_flow'].std()
         if flow_std == 0: return None
 
-        # 1. 資金流反轉 (原本的 Panic Sell 邏輯)
         flow_mean = df['net_flow'].mean()
         recent_25_flow = df['net_flow'].tail(25).sum()
         z_score = (recent_25_flow - (flow_mean * 25)) / (flow_std * np.sqrt(25))
 
-        if z_score < -3.0:
-            return "Flow Reversal (Panic Sell Detected)"
+        # ✅ 修正 1：偵測極端狂暴買盤 (Z-Score > 3.0) 才是空軍的威脅！
+        if z_score > 3.0:
+            return "Flow Reversal (Short Squeeze Detected)"
 
-        # ==========================================
-        # 🚀 2. V6.4 新增：動能衰退 (Deceleration) 預判邏輯
-        # ==========================================
+        # ✅ 修正 2：動能衰退預判 (原本跌緊，突然有大戶瘋狂買入)
         flow_older_25 = df['net_flow'].iloc[-50:-25].sum()
         acceleration = recent_25_flow - flow_older_25
-
-        # 將加速度標準化，判斷「煞車力度」有幾猛
         accel_z = acceleration / (flow_std * np.sqrt(25))
 
-        # 條件：如果煞車力度極大 (accel_z < -2.0)，且當前資金流已變成負數 (開始被砸)
-        if accel_z < -2.0 and recent_25_flow < 0:
-            # 雙重確認：即刻望一望訂單簿，睇下係咪有莊家擺咗巨型賣單壓頂
+        # 煞車轉向：加速度極強向上 (accel_z > 2.0) 且 當前資金流變為淨流入 (recent_25_flow > 0)
+        if accel_z > 2.0 and recent_25_flow > 0:
             try:
                 ob = exchange.fetch_order_book(symbol, limit=20)
                 bids_vol = sum([b[1] for b in ob['bids']])
                 asks_vol = sum([a[1] for a in ob['asks']])
                 imbalance = (bids_vol - asks_vol) / (bids_vol + asks_vol) if (bids_vol + asks_vol) > 0 else 0
 
-                if imbalance < -0.15:  # 賣盤極厚，確認買盤已死
+                if imbalance > 0.15:  # 買盤極厚，確認跌勢已死
                     return "Flow Deceleration (Momentum Died)"
             except:
                 pass
@@ -485,7 +479,8 @@ def sync_positions_on_startup():
 
                 positions[symbol] = {
                     'amount': amount, 'entry_price': entry_price, 'tp_price': tp_p, 'sl_price': sl_p,
-                    'is_breakeven': is_be, 'atr': atr, 'max_pnl_pct': 0.0, 'entry_time': time.time()
+                    'is_breakeven': is_be, 'atr': atr, 'max_pnl_pct': 0.0,
+                    'entry_time': time.time()
                 }
                 recovered_count += 1
                 print(f"✅ 成功尋回孤兒空單: {symbol} | 入場價: {entry_price} | 已保本狀態: {is_be}")
@@ -495,7 +490,7 @@ def sync_positions_on_startup():
         logger.error(f"❌ 啟動同步失敗: {e}")
 
 
-def manage_long_positions():
+def manage_short_positions():
     """管理在途多單 (Native Exit 檢查、Trail SL 更新、回撤鎖利、動態孤兒接管)"""
     try:
         # 🛠️ 修復 1：強制指定 'linear'，確保 Bybit V5 100% 準確回傳 USDT 合約
@@ -548,7 +543,7 @@ def manage_long_positions():
         for s in list(positions.keys()):
             if s not in live_symbols:
                 print(f"🧹 交易所已自動平倉，處理真實 PnL 結算單: {s}")
-                real_pnl = process_native_exit_log(s, positions[s], position_type='long')
+                real_pnl = process_native_exit_log(s, positions[s], position_type='short')
                 cancel_all_v5(s)
 
                 if real_pnl > 0:
@@ -560,7 +555,9 @@ def manage_long_positions():
         # 2. 處理仍在途的持倉
         for s in list(positions.keys()):
             curr_p, pos = exchange.fetch_ticker(s)['last'], positions[s]
-            pnl_pct = (curr_p - pos['entry_price']) / pos['entry_price']
+
+            # 🚀 必須改成這樣：做空是跌才賺錢！
+            pnl_pct = (pos['entry_price'] - curr_p) / pos['entry_price']
 
             coin_volatility_pct = pos['atr'] / pos['entry_price']
             sl_updated = False
@@ -569,18 +566,20 @@ def manage_long_positions():
             pos['max_pnl_pct'] = max(pos['max_pnl_pct'], pnl_pct)
 
             # 階段一 & 二：爬升期推保本
+            # ✅ 修正：做空保本必須低於入場價 (0.998) 才能鎖住 0.2% 獲利！原本寫 1.002 是鎖定虧損。
             if not pos['is_breakeven'] and pnl_pct > (coin_volatility_pct * 2.0):
-                pos['sl_price'], pos['is_breakeven'], sl_updated = pos['entry_price'] * 1.002, True, True
+                pos['sl_price'], pos['is_breakeven'], sl_updated = pos['entry_price'] * 0.998, True, True
 
             # 階段三：三段式放風箏追蹤止損 (Trail SL)
             if pos['is_breakeven']:
                 if pnl_pct > (coin_volatility_pct * 3.5):
-                    trail_sl = curr_p - (1.5 * pos['atr'])
+                    trail_sl = curr_p + (1.5 * pos['atr'])  # ✅ 修正：加號 (上方)
                 else:
-                    trail_sl = curr_p - (2.0 * pos['atr'])
+                    trail_sl = curr_p + (2.0 * pos['atr'])  # ✅ 修正：加號 (上方)
 
-                if trail_sl > pos['sl_price']:
-                    if (trail_sl - pos['sl_price']) / pos['sl_price'] > 0.0005:
+                # ✅ 修正：空軍止損只准向下移 (新止損 < 舊止損)
+                if trail_sl < pos['sl_price']:
+                    if (pos['sl_price'] - trail_sl) / pos['sl_price'] > 0.0005:
                         sl_updated = True
                         pos['sl_price'] = trail_sl
 
@@ -635,33 +634,37 @@ def manage_long_positions():
                     if flow_exit_reason:
                         # 如果出現衰退/反轉，無論賺定蝕，果斷跳車保命！
                         exit_reason = flow_exit_reason
+
             # ==========================================
-
-
-            # 常規本地 TP/SL 檢查
+            # 🚀 常規本地 TP/SL 檢查 (做空版本：跌穿TP止盈，升穿SL止損)
+            # ==========================================
             if not exit_reason:
-                if curr_p >= pos['tp_price']:
-                    exit_reason = "TP (Long IOC Exit)"
-                elif curr_p <= pos['sl_price']:
-                    exit_reason = "Trail SL (Long IOC Exit)" if pos['is_breakeven'] else "SL (Long IOC Exit)"
+                if curr_p <= pos['tp_price']:  # ✅ 修正：跌到或跌穿止盈價 (<=)
+                    exit_reason = "TP (Short IOC Exit)"
+                elif curr_p >= pos['sl_price']:  # ✅ 修正：升到或升穿止損價 (>=)
+                    exit_reason = "Trail SL (Short IOC Exit)" if pos['is_breakeven'] else "SL (Short IOC Exit)"
 
             # 執行本地主動平倉 (IOC)
             if exit_reason:
-                # 🛠️ V6.3 新增：喺 Print 語句加入持倉時間 (time_held/60) 同目前盈虧，方便你 Debug 睇點解斬
                 print(
                     f"⚔️ 觸發 {exit_reason}，執行 IOC 平單: {s} | 持倉: {time_held / 60:.1f}分鐘 | Max PnL: {pos['max_pnl_pct'] * 100:.2f}% | 現盈虧: {pnl_pct * 100:.2f}%")
 
-                ioc_price = get_3_layer_avg_price(s, 'bids') or curr_p
+                # 🚀 必須改為 asks (買盤取賣價)
+                ioc_price = get_3_layer_avg_price(s, 'asks') or curr_p
                 try:
-                    exchange.create_order(s, 'limit', 'sell', pos['amount'], ioc_price,
+                    # 🚀 必須改為 'buy'
+                    exchange.create_order(s, 'limit', 'buy', pos['amount'], ioc_price,
                                           {'timeInForce': 'IOC', 'reduceOnly': True})
                 except:
-                    exchange.create_market_sell_order(s, pos['amount'], {'reduceOnly': True})
+                    # 🚀 必須改為 buy_order
+                    exchange.create_market_buy_order(s, pos['amount'], {'reduceOnly': True})
 
-                ioc_pnl = round((ioc_price - pos['entry_price']) * pos['amount'], 4)
+                # 🚀 做空利潤 = (入場價 - 離場價) * 數量
+                ioc_pnl = round((pos['entry_price'] - ioc_price) * pos['amount'], 4)
 
-                log_to_csv({'symbol': s, 'action': 'LONG_EXIT', 'price': curr_p, 'amount': pos['amount'],
+                log_to_csv({'symbol': s, 'action': 'SHORT_EXIT', 'price': curr_p, 'amount': pos['amount'],
                             'reason': exit_reason, 'realized_pnl': ioc_pnl})
+
                 cancel_all_v5(s)
 
                 if ioc_pnl > 0:
@@ -681,6 +684,9 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             return
         else:
             del cooldown_tracker[symbol]
+
+    # 🛡️ 補回死水幣硬性過濾 (防止 atr 報錯)
+    if atr is None or atr == 0 or current_price == 0: return
 
     if not (is_weak and is_volatile and symbol not in positions): return
 
@@ -758,7 +764,8 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
         # 寫入本地記憶體
         positions[symbol] = {
             'amount': actual_amount, 'entry_price': actual_price, 'tp_price': tp_p, 'sl_price': sl_p,
-            'is_breakeven': False, 'atr': atr, 'max_pnl_pct': 0.0
+            'is_breakeven': False, 'atr': atr, 'max_pnl_pct': 0.0,
+            'entry_time': time.time()  # 🚀 必須補上這行！！！
         }
         cooldown_tracker[symbol] = time.time() + 480  # 🚀 配合 0.8 ATR 窄止損，放寬至 8 分鐘 (480秒) 冷卻
 
