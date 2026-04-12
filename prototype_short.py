@@ -495,7 +495,7 @@ def sync_positions_on_startup():
         logger.error(f"❌ 啟動同步失敗: {e}")
 
 
-def manage_long_positions():
+def manage_short_positions():
     """管理在途多單 (Native Exit 檢查、Trail SL 更新、回撤鎖利、動態孤兒接管)"""
     try:
         # 🛠️ 修復 1：強制指定 'linear'，確保 Bybit V5 100% 準確回傳 USDT 合約
@@ -548,7 +548,7 @@ def manage_long_positions():
         for s in list(positions.keys()):
             if s not in live_symbols:
                 print(f"🧹 交易所已自動平倉，處理真實 PnL 結算單: {s}")
-                real_pnl = process_native_exit_log(s, positions[s], position_type='long')
+                real_pnl = process_native_exit_log(s, positions[s], position_type='short')
                 cancel_all_v5(s)
 
                 if real_pnl > 0:
@@ -681,6 +681,9 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             return
         else:
             del cooldown_tracker[symbol]
+
+    # 🛡️ 補回死水幣硬性過濾 (防止 atr 報錯)
+    if atr is None or atr == 0 or current_price == 0: return
 
     if not (is_weak and is_volatile and symbol not in positions): return
 
