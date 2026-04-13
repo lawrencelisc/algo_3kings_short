@@ -417,15 +417,15 @@ def get_btc_regime_short():
         cond_vol    = completed_v > df15['v'].iloc[-25:-1].median() * 0.8
 
         if cond_trend and cond_adx and cond_vol and not hard_brake:
-            status, signal = "🔴 GREEN-SHORT (下降趨勢 + ADX + 放量確認)", -1
+            status, signal = "🟢 GREEN-SHORT (下降趨勢 + ADX + 放量確認)", -1
         elif hard_brake:
-            status, signal = f"🟢 RED-SHORT  (HARD BRAKE: {brake_reason})", 0
+            status, signal = f"🔴 RED-SHORT  (HARD BRAKE: {brake_reason})", 0
         elif soft_brake:
-            status, signal = f"🟡 SOFT-SHORT (SOFT BRAKE: {brake_reason})", -1
+            status, signal = f"🟡 SOFT-SHORT (SOFT BRAKE: {brake_reason})", 0
         elif cond_trend or cond_adx:
             status, signal = "🟡 YELLOW     (等待趨勢與動能匯聚)", 0
         else:
-            status, signal = "🟢 RED-SHORT  (行情偏多，空單暫停)", 0
+            status, signal = "🔴 RED-STOP  (大盤偏多，空單暫停)", 0
 
         log_status_to_csv({
             'btc_price': round(curr_p, 2), 'target_price': round(h15_50_val, 2),
@@ -924,7 +924,7 @@ def main():
                 if regime['signal'] == -1:
                     if _current_state != _last_brake_state:
                         label = '空頭綠燈' if _current_state == 'GREEN' else '軟剎車 (仍允許做空)'
-                        print(f"🔴 {label}確認：執行弱幣海選掃描...")
+                        print(f"🟢 {label}確認：執行弱幣海選掃描...")
 
                     for s in target_coins:
                         try:
