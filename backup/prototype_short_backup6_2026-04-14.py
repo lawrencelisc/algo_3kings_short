@@ -15,8 +15,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('AlgoTrade_Short_V6.6_Thermostat')
 
 # Name: yukikaze
-API_KEY = "1VjRtJ4cjuJiFk2wFs"
-API_SECRET = "s5N38enwd75l0CxvIFLPFWWWmAbj2YxK941j"
+API_KEY = ""
+API_SECRET = ""
 
 exchange = ccxt.bybit({
     'apiKey': API_KEY,
@@ -29,7 +29,7 @@ exchange.load_markets()
 # ──────────────────────────────────────────
 # 📁 檔案路徑 (Short 版獨立檔案，不與 Long 衝突)
 # ──────────────────────────────────────────
-LOG_DIR    = "result"
+LOG_DIR    = "../result"
 STATUS_DIR = "../status"
 LOG_FILE       = f"{LOG_DIR}/live_short_log.csv"
 STATUS_FILE    = f"{STATUS_DIR}/btc_regime_short.csv"
