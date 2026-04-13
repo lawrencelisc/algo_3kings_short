@@ -11,7 +11,7 @@ from datetime import datetime
 # ⚙️ [系統/參數] 模組初始化與 API 配置
 # ==========================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger('AlgoTrade_Short_V6.0')
+logger = logging.getLogger('AlgoTrade_Short_V7.1')
 
 # ⚠️ API 金鑰配置 (請確保安全)
 API_KEY = "1VjRtJ4cjuJiFk2wFs"
@@ -38,28 +38,50 @@ if not os.path.exists(STATUS_DIR): os.makedirs(STATUS_DIR)
 positions = {}
 cooldown_tracker = {}
 
+# [V7.1] 動態短期封禁追蹤器
+# 結構：{ 'symbol': {'loss_count': N, 'ban_until': timestamp_or_0} }
+dynamic_ban_tracker = {}
+
 # ==========================================
 # ⚙️ [系統/參數] 策略與風控全局變數
 # ==========================================
 # --- 基礎資金管理 ---
 WORKING_CAPITAL = 1000.0                                # 運作本金上限
 MAX_LEVERAGE = 10.0                                     # 最大槓桿倍數
-RISK_PER_TRADE = 0.01                                   # 每筆交易風險比例 (1%)
+RISK_PER_TRADE = 0.006                                  # [V7.0 改善5] 每筆交易風險比例：1% → 0.6%
+                                                        # 勝率未達 40% 前先縮手，保護資本
 MIN_NOTIONAL = 5.0                                      # 交易所最小名義價值要求
 
 # 🛡️ 防護網 1：單筆名義價值硬上限 (防止低 ATR 導致買入天文數字)
-MAX_NOTIONAL_PER_TRADE = 200.0
+MAX_NOTIONAL_PER_TRADE = 120.0                          # [V7.0 改善5] 上限：200 → 120，配合窄止損風控
 
 # --- 大幣空軍專用設定 (專打流動性霸主) ---
 NET_FLOW_SIGMA = 1.2                                    # 資金流偏離度觸發門檻
-TP_ATR_MULT = 5.0                                       # 止盈 ATR 倍數 🚀 放闊止盈 (由 3.0 改 5.0)，讓暴跌利潤奔跑
-SL_ATR_MULT = 0.8                                       # 初始止損 ATR 倍數 🚀 收緊止損 (由 1.5 改 0.8)，見勢色唔對即刻斬！
+TP_ATR_MULT = 5.0                                       # 止盈 ATR 倍數 🚀 放闊止盈，讓暴跌利潤奔跑
+SL_ATR_MULT = 1.2                                       # [V7.0 改善2] 止損 ATR 倍數：由 0.8 → 1.2
+                                                        # 原 0.8 太緊被假突破掃損，Native TP/SL 佔虧損 80%+
+                                                        # 1.2 給幣價多一點呼吸空間，配合倉位縮小補償風險
 # TRAIL_ATR_MULT = 1.0                                  # 追蹤止損 ATR 步進倍數
 MIN_IMBALANCE_RATIO = 0.2                               # 訂單簿失衡度門檻 (賣盤需厚於買盤 15%)
 
 # --- 系統監控頻率 ---
 SCOUTING_INTERVAL = 125                                 # 海選掃描頻率 (秒)
 POSITION_CHECK_INTERVAL = 4                             # 持倉巡邏頻率 (秒) - 4秒極速貼盤
+
+# 🛡️ [V7.1] 動態短期封禁參數
+# 邏輯：同一幣對連續虧損 N 筆後，自動封禁一段時間冷靜
+DYNAMIC_BAN_LOSS_THRESHOLD = 3                          # 連續虧損幾筆觸發封禁
+DYNAMIC_BAN_DURATION_HOURS = 6                          # 封禁時長 (小時)
+DYNAMIC_BAN_FILE = f"{STATUS_DIR}/dynamic_ban.json"     # 持久化檔案 (重啟後保留封禁狀態)
+# 原本全部 300 秒才止損，導致 39 筆 Time Stop 慢慢虧。
+# 新策略：進場後 120 秒若從未出現正利潤，視為「完全沒有啟動」直接斬！
+# 若曾有盈利但現在轉虧，保持原本 300 秒寬容。
+TIME_STOP_FAST = 120                                    # 快速止損：120 秒內從未進入盈利區 = 入場時機錯誤
+TIME_STOP_SLOW = 300                                    # 標準止損：曾有獲利但熄滅，給多點時間
+
+# 🛡️ [V7.0 改善2] 進場動量確認門檻
+# 除了 Z-Score，額外要求加速度 acceleration 標準化後必須明顯為負，才算真動量
+MIN_ACCELERATION_SIGMA = 1.0                            # 加速度最小 Sigma 門檻 (增強進場確認)
 
 # 🛡️ 防護網 2：利潤回撤鎖利 (Profit Retrace Lock)
 # PROFIT_LOCK_THRESHOLD = 0.010                         # 啟動門檻：當利潤達到 1.0% 時啟動回撤保護
@@ -72,7 +94,9 @@ BLACKLIST = [
     'USDE/USDT:USDT', 'USAT/USDT:USDT', 'USD0/USDT:USDT', 'USTC/USDT:USDT',
     'LUSD/USDT:USDT', 'FRAX/USDT:USDT', 'MIM/USDT:USDT', 'RLUSD/USDT:USDT',
     'WBTC/USDT:USDT', 'WETH/USDT:USDT', 'WBNB/USDT:USDT', 'WAVAX/USDT:USDT',
-    'stETH/USDT:USDT', 'cbETH/USDT:USDT', 'WHT/USDT:USDT'
+    'stETH/USDT:USDT', 'cbETH/USDT:USDT', 'WHT/USDT:USDT',
+    # [V7.0 改善4] 回測分析最差幣對：流動性差或波動不規律，不適合本套做空邏輯
+    'RAVE/USDT:USDT', 'SIREN/USDT:USDT', 'TAO/USDT:USDT',
 ]
 
 CSV_COLUMNS = ['timestamp', 'symbol', 'action', 'price', 'amount', 'trade_value', 'atr', 'net_flow', 'tp_price',
@@ -80,9 +104,88 @@ CSV_COLUMNS = ['timestamp', 'symbol', 'action', 'price', 'amount', 'trade_value'
 
 STATUS_COLUMNS = ['timestamp', 'btc_price', 'target_price', 'hma20', 'hma50', 'adx', 'signal_code', 'decision_text']
 
+import json
+
 # ==========================================
 # 🛠️ [輔助模組] 記錄、帳戶與訂單管理
 # ==========================================
+
+# ==========================================
+# 🚫 [V7.1] 動態短期封禁系統
+# ==========================================
+def load_dynamic_bans():
+    """從 JSON 讀取封禁狀態（支援程式重啟後保留）"""
+    global dynamic_ban_tracker
+    try:
+        if os.path.exists(DYNAMIC_BAN_FILE):
+            with open(DYNAMIC_BAN_FILE, 'r') as f:
+                dynamic_ban_tracker = json.load(f)
+            # 清理已過期的封禁，保持檔案乾淨
+            now = time.time()
+            expired = [s for s, v in dynamic_ban_tracker.items() if v.get('ban_until', 0) < now and v.get('ban_until', 0) != 0]
+            for s in expired:
+                dynamic_ban_tracker[s]['ban_until'] = 0
+                dynamic_ban_tracker[s]['loss_count'] = 0
+            if expired:
+                save_dynamic_bans()
+                print(f"🔓 動態封禁自動解除：{expired}")
+    except Exception as e:
+        logger.warning(f"⚠️ 讀取動態封禁檔案失敗，重新初始化: {e}")
+        dynamic_ban_tracker = {}
+
+
+def save_dynamic_bans():
+    """將封禁狀態持久化到 JSON"""
+    try:
+        with open(DYNAMIC_BAN_FILE, 'w') as f:
+            json.dump(dynamic_ban_tracker, f, indent=2)
+    except Exception as e:
+        logger.warning(f"⚠️ 儲存動態封禁失敗: {e}")
+
+
+def is_dynamically_banned(symbol):
+    """檢查幣對是否處於動態封禁期"""
+    if symbol not in dynamic_ban_tracker:
+        return False
+    ban_until = dynamic_ban_tracker[symbol].get('ban_until', 0)
+    if ban_until == 0:
+        return False
+    if time.time() < ban_until:
+        remaining_h = (ban_until - time.time()) / 3600
+        print(f"🚫 {symbol} 動態封禁中，剩餘 {remaining_h:.1f} 小時")
+        return True
+    else:
+        # 封禁已到期，重置計數
+        dynamic_ban_tracker[symbol]['ban_until'] = 0
+        dynamic_ban_tracker[symbol]['loss_count'] = 0
+        save_dynamic_bans()
+        print(f"🔓 {symbol} 動態封禁已解除，重新允許進場")
+        return False
+
+
+def record_trade_result(symbol, pnl):
+    """記錄每筆交易結果，累積連敗後觸發動態封禁"""
+    if symbol not in dynamic_ban_tracker:
+        dynamic_ban_tracker[symbol] = {'loss_count': 0, 'ban_until': 0}
+
+    if pnl < 0:
+        dynamic_ban_tracker[symbol]['loss_count'] += 1
+        loss_count = dynamic_ban_tracker[symbol]['loss_count']
+        print(f"📊 {symbol} 連續虧損計數: {loss_count}/{DYNAMIC_BAN_LOSS_THRESHOLD}")
+
+        if loss_count >= DYNAMIC_BAN_LOSS_THRESHOLD:
+            ban_until = time.time() + (DYNAMIC_BAN_DURATION_HOURS * 3600)
+            dynamic_ban_tracker[symbol]['ban_until'] = ban_until
+            ban_str = datetime.fromtimestamp(ban_until).strftime("%Y-%m-%d %H:%M")
+            print(f"🔴 {symbol} 連敗 {loss_count} 筆，觸發動態封禁至 {ban_str}！")
+    else:
+        # 獲利，重置連敗計數
+        if dynamic_ban_tracker[symbol]['loss_count'] > 0:
+            print(f"✅ {symbol} 獲利，重置連敗計數")
+        dynamic_ban_tracker[symbol]['loss_count'] = 0
+        dynamic_ban_tracker[symbol]['ban_until'] = 0
+
+    save_dynamic_bans()
 def log_to_csv(data_dict):
     """一般交易紀錄寫入 CSV"""
     row = {col: '' for col in CSV_COLUMNS}
@@ -425,12 +528,20 @@ def apply_lee_ready_short_logic(symbol):
         is_weak = False
         if df['net_flow'].std() > 0:
             z_score = short_window_flow / (df['net_flow'].std() * np.sqrt(50))
+            # [V7.0 改善3] 加速度標準化：量化加速度相對於資金流波動的強度
+            accel_sigma = acceleration / (df['net_flow'].std() * np.sqrt(25)) if df['net_flow'].std() > 0 else 0
         else:
             z_score = 0
+            accel_sigma = 0
 
         if (short_window_flow < 0) and (acceleration < 0) and (imbalance < -0.15):
-            is_weak = True
-            print(f"🔥 {symbol} Short Sniper! Accel: {acceleration:.0f} | Imbalance: {imbalance:.2f}")
+            # [V7.0 改善3] 三因子確認進場：原本不檢查加速度強度，現在要求 accel_sigma < -MIN_ACCELERATION_SIGMA
+            # 確保跌勢「真的在加速」，而不是隨機雜訊，對應 Flow Deceleration 出場的有效進場特徵
+            if accel_sigma < -MIN_ACCELERATION_SIGMA:
+                is_weak = True
+                print(f"🔥 {symbol} Short Sniper! Accel σ: {accel_sigma:.2f} | Imbalance: {imbalance:.2f}")
+            else:
+                print(f"⚠️ {symbol} 加速度不足 (σ={accel_sigma:.2f})，跳過假動量進場")
         elif z_score < -NET_FLOW_SIGMA:
             is_weak = True
             print(f"📉 {symbol} Short Z-Score Validated: {z_score:.2f}")
@@ -548,6 +659,7 @@ def manage_short_positions():
                 print(f"🧹 交易所已自動平倉，處理真實 PnL 結算單: {s}")
                 real_pnl = process_native_exit_log(s, positions[s], position_type='short')
                 cancel_all_v5(s)
+                record_trade_result(s, real_pnl)  # [V7.1] 動態封禁計數
 
                 if real_pnl > 0:
                     print(f"🏆 {s} 贏錢平倉！解除冷卻，允許乘勝追擊！")
@@ -567,6 +679,12 @@ def manage_short_positions():
 
             if 'max_pnl_pct' not in pos: pos['max_pnl_pct'] = pnl_pct
             pos['max_pnl_pct'] = max(pos['max_pnl_pct'], pnl_pct)
+
+            # [V7.0 改善1] 追蹤是否曾進入盈利區，用於 Time Stop 雙速判斷
+            if 'ever_profitable' not in pos:
+                pos['ever_profitable'] = False
+            if pnl_pct > 0:
+                pos['ever_profitable'] = True
 
             # 階段一 & 二：爬升期推保本
             # ✅ 修正：做空保本必須低於入場價 (0.998) 才能鎖住 0.2% 獲利！原本寫 1.002 是鎖定虧損。
@@ -604,17 +722,18 @@ def manage_short_positions():
             # 🛠️ V6.3 新增與修改：雙重 Timeout 終極機制 (取代舊的單一聰明時間止損)
             # ==========================================
             if not exit_reason:
-                # 🔪 條件 A (快速止損)：持倉 > 5 分鐘 (300秒) 且處於虧損狀態
-                # (呢個係你原本 V6.1 寫落嘅「聰明時間止損」，我原封不動保留)
-                if time_held > 300 and pnl_pct < 0:
+                # [V7.0 改善1] 雙速 Time Stop
+                # 快速：120 秒內從未進入盈利區 = 入場時機完全錯誤，立刻斬！
+                if time_held > TIME_STOP_FAST and pnl_pct < 0 and not pos.get('ever_profitable', False):
                     exit_reason = "Time Stop (Failed to ignite)"
 
-                # 🔪 🛠️ V6.3 新增 條件 B (喪失動能/變死水)：持倉 > 15 分鐘 (900秒) 且利潤微薄 (< 0.5%)
-                # 專門對付嗰啲入完場之後長期橫盤、升極都升唔起嘅「殭屍幣」(Zombie Coins)。
-                # 費事阻住啲資金，直接斬纜！
+                # 標準：曾有盈利但燃燒熄滅，給多 300 秒（原邏輯保留）
+                elif time_held > TIME_STOP_SLOW and pnl_pct < 0:
+                    exit_reason = "Time Stop (Failed to ignite)"
+
+                # 殭屍幣：持倉 > 15 分鐘且利潤微薄 (< 0.5%)
                 elif time_held > 900 and pnl_pct < 0.005:
                     exit_reason = "Momentum Timeout (Stalled Zombie)"
-            # ==========================================
 
             # # 資金流反轉檢測
             # if not exit_reason and not pos['is_breakeven'] and pnl_pct < 0:
@@ -669,6 +788,7 @@ def manage_short_positions():
                             'reason': exit_reason, 'realized_pnl': ioc_pnl})
 
                 cancel_all_v5(s)
+                record_trade_result(s, ioc_pnl)  # [V7.1] 動態封禁計數
 
                 if ioc_pnl > 0:
                     print(f"🏆 {s} Bot 主動止盈平倉！解除冷卻，允許乘勝追擊！")
@@ -687,6 +807,10 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
             return
         else:
             del cooldown_tracker[symbol]
+
+    # [V7.1] 動態短期封禁檢查（連敗自動冷靜）
+    if is_dynamically_banned(symbol):
+        return
 
     # 🛡️ 補回死水幣硬性過濾 (防止 atr 報錯)
     if atr is None or atr == 0 or current_price == 0: return
@@ -788,8 +912,15 @@ def execute_live_short(symbol, net_flow, current_price, is_weak, atr, is_volatil
 # 🚀 [主程序] 主迴圈與事件驅動
 # ==========================================
 def main():
-    print(f"🚀 AI 實戰 V6.0 FINAL SHORT (重裝甲防護版) 啟動...")
+    print(f"🚀 AI 實戰 V7.1 SHORT (回測改善版) 啟動...")
+    print(f"[V7.1 改善] Time Stop 雙速 | SL ATR 1.2x | 倉位縮小 0.6% | 黑名單 +RAVE/SIREN/TAO | 進場加速度確認 | 動態封禁系統")
     print(f"Lee-Ready 資金流 + 訂單簿失衡度 + 大幣動態海選 [終極做空版] 初始化中...")
+
+    # 啟動時載入動態封禁狀態（重啟後保留）
+    load_dynamic_bans()
+    active_bans = [s for s, v in dynamic_ban_tracker.items() if v.get('ban_until', 0) > time.time()]
+    if active_bans:
+        print(f"🔴 載入動態封禁清單：{active_bans}")
 
     # 啟動時先同步遺留的倉位
     sync_positions_on_startup()
@@ -825,7 +956,8 @@ def main():
                     target_coins = []  # 黃/紅燈時清空孤兒名單
 
                 last_scout_time = curr_t
-                print(f"⏳ 空軍巡邏完畢 | 持倉: {list(positions.keys())} | 餘額: {get_live_usdt_balance():.2f}")
+                active_bans = [s for s, v in dynamic_ban_tracker.items() if v.get('ban_until', 0) > time.time()]
+                print(f"⏳ 空軍巡邏完畢 | 持倉: {list(positions.keys())} | 餘額: {get_live_usdt_balance():.2f} | 動態封禁: {active_bans if active_bans else '無'}")
 
             # 3. 持倉巡邏間隔
             time.sleep(POSITION_CHECK_INTERVAL)
